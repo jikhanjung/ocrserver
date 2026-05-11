@@ -1,6 +1,6 @@
 services:
   chandra-a:
-    image: chandra-vllm:latest
+    image: honestjung/ocrserver:latest
     deploy:
       resources:
         reservations:
@@ -16,7 +16,7 @@ services:
     restart: unless-stopped
 
   chandra-b:
-    image: chandra-vllm:latest
+    image: honestjung/ocrserver:latest
     deploy:
       resources:
         reservations:

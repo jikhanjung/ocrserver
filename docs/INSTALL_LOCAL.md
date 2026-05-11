@@ -1,6 +1,6 @@
 # Local Server 설치 가이드 (ocrserver)
 
-로컬 GPU 서버에 NVIDIA 드라이버 + Docker + NVIDIA Container Toolkit을 설치해 `chandra-vllm` 이미지를 돌리기 위한 절차.
+로컬 GPU 서버에 NVIDIA 드라이버 + Docker + NVIDIA Container Toolkit을 설치해 `honestjung/ocrserver` 이미지를 돌리기 위한 절차.
 
 ## 대상 환경 (이 가이드가 가정하는 것)
 
@@ -184,7 +184,7 @@ docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
 
 ```bash
 cd ~/projects/ocrserver
-docker build -t chandra-vllm:latest .
+docker build -t honestjung/ocrserver:latest .
 ```
 
 - 빌드 중 `datalab-to/chandra-ocr-2`를 HuggingFace에서 받아 이미지에 굽기 때문에 한 번에 10-20GB 다운로드/저장. 디스크 free를 미리 확인할 것.
@@ -199,7 +199,7 @@ docker run --rm -it \
   -p 8000:8000 \
   -v "$PWD/pdfs":/workspace/pdfs:ro \
   -v "$PWD/ocr_json":/workspace/ocr_json \
-  chandra-vllm:latest
+  honestjung/ocrserver:latest
 ```
 
 다른 터미널에서:
@@ -242,11 +242,11 @@ docker compose -f docker-compose.local.yml logs -f chandra-a
 ```bash
 docker run -d --name chandra-a --gpus '"device=0"' -p 8000:8000 \
   -v "$PWD/pdfs":/workspace/pdfs:ro \
-  -v "$PWD/ocr_json":/workspace/ocr_json chandra-vllm:latest
+  -v "$PWD/ocr_json":/workspace/ocr_json honestjung/ocrserver:latest
 
 docker run -d --name chandra-b --gpus '"device=1"' -p 8001:8000 \
   -v "$PWD/pdfs":/workspace/pdfs:ro \
-  -v "$PWD/ocr_json":/workspace/ocr_json chandra-vllm:latest
+  -v "$PWD/ocr_json":/workspace/ocr_json honestjung/ocrserver:latest
 ```
 
 클라이언트 쪽에서는 endpoint URL 두 개를 round-robin 또는 idle worker 큐로 분배하면 됩니다.
@@ -278,7 +278,7 @@ docker run -d --name chandra-b --gpus '"device=1"' -p 8001:8000 \
 ## 다음 단계
 
 1. 이 가이드대로 드라이버 + Docker + Toolkit 설치 후 `nvidia-smi`(host) → `docker run --gpus all` 검증까지 통과
-2. `docker build -t chandra-vllm:latest .` → 기동 로그에서 `[entrypoint] GPU CC=75 -> VLLM_DTYPE=float16` 확인
+2. `docker build -t honestjung/ocrserver:latest .` → 기동 로그에서 `[entrypoint] GPU CC=75 -> VLLM_DTYPE=float16` 확인
 3. `curl http://localhost:8000/health` 및 `/v1/models` 응답 확인
 4. `batch_ocr.py`로 1페이지 PDF 한 건 처리해 OCR 품질 spot-check (Turing FP16에서 정확도 손실이 없는지)
 5. `docker compose -f docker-compose.local.yml up -d`로 2-GPU 동시 기동, `nvidia-smi -l 2`로 두 카드 점유 확인

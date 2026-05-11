@@ -17,10 +17,10 @@ Requires NVIDIA driver + Docker + NVIDIA Container Toolkit on the host. See [doc
 
 ```bash
 # Build (downloads ~10-20GB of model weights into the image)
-docker build -t chandra-vllm:latest .
+docker build -t honestjung/ocrserver:latest .
 
 # Run on a single GPU (device 0)
-docker run --rm -it --gpus '"device=0"' -p 8000:8000 chandra-vllm:latest
+docker run --rm -it --gpus '"device=0"' -p 8000:8000 honestjung/ocrserver:latest
 ```
 
 Two-GPU pattern (one container per card):

@@ -17,12 +17,12 @@ For sustained batch workloads, a reserved Pod is dramatically cheaper than serve
 
 1. Build & push the image to a registry RunPod can pull from (Docker Hub, GHCR, or build directly on RunPod).
    ```bash
-   docker build -t <your-registry>/ocrserver:latest .
-   docker push <your-registry>/ocrserver:latest
+   docker build -t honestjung/ocrserver:latest .
+   docker push honestjung/ocrserver:latest
    ```
 2. RunPod console → **Pods → Deploy**.
 3. **GPU**: A40 (48GB) is a good default for this model. Any Ampere or newer card with ≥40GB VRAM works; bf16 is selected automatically.
-4. **Container Image**: `<your-registry>/ocrserver:latest`.
+4. **Container Image**: `honestjung/ocrserver:latest`.
 5. **Expose HTTP Port**: `8000`.
 6. **Volume**: not required — model weights are inside the image. Attach one only if you want OCR output to survive Pod termination.
 7. Deploy.
