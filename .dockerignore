@@ -1,0 +1,11 @@
+.git
+.github
+.gitignore
+docs/
+*.md
+docker-compose.local.yml
+ocr_json/
+pdfs/
+__pycache__/
+*.pyc
+.venv/

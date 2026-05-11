@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+ocr_json/
+pdfs/
+*.swp
+.DS_Store
