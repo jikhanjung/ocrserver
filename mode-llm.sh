@@ -1,0 +1,18 @@
+#!/bin/bash
+# GPU 1: Qwen3-14B LLM
+set -e
+cd /srv/ocrserver
+
+echo "[mode] chandra-b 중지..."
+docker compose --profile ocr stop chandra-b 2>/dev/null || true
+
+echo "OCR_CONCURRENCY=6" > .env
+
+echo "[mode] LLM 기동 (GPU 1)..."
+docker compose --profile llm up -d llm
+docker compose up -d --no-deps --force-recreate wrapper
+
+echo "[mode] nginx reload (DNS refresh)..."
+docker compose exec nginx nginx -s reload 2>/dev/null || true
+
+echo "[mode] OCR × 1 (GPU 0) + LLM Qwen3-14B (GPU 1) — concurrency 6"

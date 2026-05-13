@@ -8,15 +8,13 @@ services:
     depends_on:
       - chandra-a
       - wrapper
-      - llm
     restart: unless-stopped
 
   wrapper:
-    build:
-      context: ./wrapper
+    image: ocrserver-wrapper:latest
     environment:
       VLLM_URL: http://nginx:80
-      OCR_CONCURRENCY: "6"
+      OCR_CONCURRENCY: "${OCR_CONCURRENCY:-6}"
       OCR_DPI: "150"
       DB_PATH: /data/ocrserver.db
     volumes:
@@ -45,7 +43,31 @@ services:
       start_period: 180s
     restart: unless-stopped
 
+  # GPU 1 — OCR 모드 (mode-ocr.sh로 활성화)
+  chandra-b:
+    profiles: [ocr]
+    image: honestjung/ocrserver:latest
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['1']
+              capabilities: [gpu]
+    volumes:
+      - ./pdfs:/workspace/pdfs:ro
+      - ./ocr_json:/workspace/ocr_json
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+    restart: unless-stopped
+
+  # GPU 1 — LLM 모드 (mode-llm.sh로 활성화)
   llm:
+    profiles: [llm]
     image: vllm/vllm-openai:latest
     command: >-
       Qwen/Qwen3-14B
