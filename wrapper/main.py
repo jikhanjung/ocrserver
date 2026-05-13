@@ -124,6 +124,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 _DASHBOARD = open(os.path.join(os.path.dirname(__file__), "dashboard.html")).read()
+_STATUS_PAGE = open(os.path.join(os.path.dirname(__file__), "status.html")).read()
+
+LLM_URL = os.getenv("LLM_URL", "")  # optional override; falls back to VLLM_URL/llm/
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -131,6 +134,38 @@ _DASHBOARD = open(os.path.join(os.path.dirname(__file__), "dashboard.html")).rea
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
     return _DASHBOARD
+
+
+@app.get("/status", response_class=HTMLResponse)
+async def status_page():
+    return _STATUS_PAGE
+
+
+@app.get("/api/services")
+async def api_services():
+    llm_base = LLM_URL.rstrip("/") if LLM_URL else f"{VLLM_URL.rstrip('/')}/llm"
+    checks = {
+        "chandra": f"{VLLM_URL.rstrip('/')}/health",
+        "llm": f"{llm_base}/health",
+    }
+    results: dict[str, dict] = {}
+    async with httpx.AsyncClient(timeout=5) as client:
+        for name, url in checks.items():
+            try:
+                r = await client.get(url)
+                results[name] = {
+                    "status": "ok" if r.status_code == 200 else "error",
+                    "http_status": r.status_code,
+                }
+            except Exception as e:
+                results[name] = {"status": "down", "error": str(e)}
+    results["_meta"] = {
+        "chandra_url": checks["chandra"],
+        "llm_url": checks["llm"],
+        "concurrency": CONCURRENCY,
+        "uptime_s": int(time.time() - _start_time),
+    }
+    return results
 
 
 @app.get("/api/stats")
