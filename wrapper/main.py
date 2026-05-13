@@ -70,10 +70,10 @@ async def db_find_done_by_hash(file_hash: str) -> dict | None:
     return await db_get_job(row["job_id"]) if row else None
 
 
-async def db_find_done_by_filename(filename: str, file_hash: str) -> dict | None:
+async def db_find_done_by_filename(filename: str, total_pages: int, file_hash: str) -> dict | None:
     async with _db.execute(
-        "SELECT job_id FROM jobs WHERE filename=? AND file_hash IS NULL AND status='done' ORDER BY completed_at DESC LIMIT 1",
-        (filename,),
+        "SELECT job_id FROM jobs WHERE filename=? AND total_pages=? AND file_hash IS NULL AND status='done' ORDER BY completed_at DESC LIMIT 1",
+        (filename, total_pages),
     ) as c:
         row = await c.fetchone()
     if not row:
@@ -223,6 +223,13 @@ async def submit(background_tasks: BackgroundTasks, file: UploadFile = File(...)
     pdf_bytes = await file.read()
     file_hash = hashlib.sha256(pdf_bytes).hexdigest()
 
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        total_pages = len(doc)
+        doc.close()
+    except Exception:
+        total_pages = 0
+
     pdf_path = os.path.join(PDF_DIR, f"{file_hash}.pdf")
     if not os.path.exists(pdf_path):
         with open(pdf_path, "wb") as f:
@@ -230,7 +237,7 @@ async def submit(background_tasks: BackgroundTasks, file: UploadFile = File(...)
 
     existing = (
         await db_find_done_by_hash(file_hash) or
-        await db_find_done_by_filename(file.filename, file_hash)
+        await db_find_done_by_filename(file.filename, total_pages, file_hash)
     )
     if existing:
         return {"job_id": existing["job_id"], "cached": True}
