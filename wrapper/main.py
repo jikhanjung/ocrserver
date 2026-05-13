@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import os
 import time
 import uuid
@@ -31,6 +32,7 @@ async def db_init() -> None:
         CREATE TABLE IF NOT EXISTS jobs (
             job_id       TEXT PRIMARY KEY,
             filename     TEXT,
+            file_hash    TEXT,
             status       TEXT DEFAULT 'queued',
             submitted_at REAL,
             completed_at REAL,
@@ -39,6 +41,7 @@ async def db_init() -> None:
             failed_pages INTEGER DEFAULT 0,
             error        TEXT
         );
+        CREATE INDEX IF NOT EXISTS idx_jobs_file_hash ON jobs(file_hash);
         CREATE TABLE IF NOT EXISTS pages (
             job_id      TEXT,
             page_num    INTEGER,
@@ -50,13 +53,26 @@ async def db_init() -> None:
             FOREIGN KEY (job_id) REFERENCES jobs(job_id)
         );
     """)
+    async with _db.execute("PRAGMA table_info(jobs)") as c:
+        cols = {row[1] for row in await c.fetchall()}
+    if "file_hash" not in cols:
+        await _db.execute("ALTER TABLE jobs ADD COLUMN file_hash TEXT")
     await _db.commit()
 
 
-async def db_create_job(job_id: str, filename: str, submitted_at: float) -> None:
+async def db_find_done_by_hash(file_hash: str) -> dict | None:
+    async with _db.execute(
+        "SELECT job_id FROM jobs WHERE file_hash=? AND status='done' ORDER BY completed_at DESC LIMIT 1",
+        (file_hash,),
+    ) as c:
+        row = await c.fetchone()
+    return await db_get_job(row["job_id"]) if row else None
+
+
+async def db_create_job(job_id: str, filename: str, file_hash: str, submitted_at: float) -> None:
     await _db.execute(
-        "INSERT INTO jobs (job_id, filename, status, submitted_at) VALUES (?,?,'queued',?)",
-        (job_id, filename, submitted_at),
+        "INSERT INTO jobs (job_id, filename, file_hash, status, submitted_at) VALUES (?,?,?,'queued',?)",
+        (job_id, filename, file_hash, submitted_at),
     )
     await _db.commit()
 
@@ -189,12 +205,19 @@ async def api_stats():
 
 @app.post("/ocr")
 async def submit(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    job_id = str(uuid.uuid4())
     pdf_bytes = await file.read()
+    file_hash = hashlib.sha256(pdf_bytes).hexdigest()
+
+    existing = await db_find_done_by_hash(file_hash)
+    if existing:
+        return {"job_id": existing["job_id"], "cached": True}
+
+    job_id = str(uuid.uuid4())
     now = time.time()
     _jobs[job_id] = {
         "job_id": job_id,
         "filename": file.filename,
+        "file_hash": file_hash,
         "status": "queued",
         "submitted_at": now,
         "total_pages": 0,
@@ -202,9 +225,9 @@ async def submit(background_tasks: BackgroundTasks, file: UploadFile = File(...)
         "failed_pages": 0,
         "pages": [],
     }
-    await db_create_job(job_id, file.filename, now)
+    await db_create_job(job_id, file.filename, file_hash, now)
     background_tasks.add_task(_run, job_id, pdf_bytes)
-    return {"job_id": job_id}
+    return {"job_id": job_id, "cached": False}
 
 
 @app.get("/ocr")
@@ -258,7 +281,7 @@ async def _run(job_id: str, pdf_bytes: bytes) -> None:
     ]
     doc.close()
 
-    async with httpx.AsyncClient(timeout=300) as client:
+    async with httpx.AsyncClient(timeout=3000) as client:
         await asyncio.gather(*[_ocr_page(job, i, b64, client) for i, b64 in enumerate(pages_b64)])
 
     completed_at = time.time()
