@@ -42,7 +42,6 @@ async def db_init() -> None:
             failed_pages INTEGER DEFAULT 0,
             error        TEXT
         );
-        CREATE INDEX IF NOT EXISTS idx_jobs_file_hash ON jobs(file_hash);
         CREATE TABLE IF NOT EXISTS pages (
             job_id      TEXT,
             page_num    INTEGER,
@@ -58,6 +57,7 @@ async def db_init() -> None:
         cols = {row[1] for row in await c.fetchall()}
     if "file_hash" not in cols:
         await _db.execute("ALTER TABLE jobs ADD COLUMN file_hash TEXT")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_file_hash ON jobs(file_hash)")
     await _db.commit()
 
 
