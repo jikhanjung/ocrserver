@@ -8,6 +8,22 @@ services:
     depends_on:
       - chandra-a
       - chandra-b
+      - wrapper
+    restart: unless-stopped
+
+  wrapper:
+    build:
+      context: ./wrapper
+    environment:
+      VLLM_URL: http://nginx:80
+      OCR_CONCURRENCY: "12"
+      OCR_DPI: "150"
+      DB_PATH: /data/ocrserver.db
+    volumes:
+      - ./data:/data
+    depends_on:
+      - chandra-a
+      - chandra-b
     restart: unless-stopped
 
   chandra-a:
@@ -22,6 +38,12 @@ services:
     volumes:
       - ./pdfs:/workspace/pdfs:ro
       - ./ocr_json:/workspace/ocr_json
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
     restart: unless-stopped
 
   chandra-b:
@@ -36,4 +58,10 @@ services:
     volumes:
       - ./pdfs:/workspace/pdfs:ro
       - ./ocr_json:/workspace/ocr_json
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
     restart: unless-stopped

@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+pymupdf
+httpx
+python-multipart
+aiosqlite

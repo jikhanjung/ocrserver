@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ocrserver</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+  body { background:#f4f6f9; color:#212529; }
+  .navbar { background:#2c3e50; }
+  .stat-card { border:none; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  .stat-val  { font-size:2rem; font-weight:700; line-height:1.1; }
+  .table-card { border:none; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  .table thead th { background:#f8f9fa; font-size:.8rem; text-transform:uppercase;
+                    letter-spacing:.04em; color:#6c757d; border-bottom:2px solid #dee2e6; }
+  .table tbody tr { cursor:pointer; }
+  .table tbody tr:hover { background:#eef2ff; }
+  .table tbody tr.selected { background:#dce8ff; }
+  .progress  { height:6px; background:#e9ecef; border-radius:3px; }
+  #detail    { border:none; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,.08);
+               background:#fff; }
+  code       { color:#0d6efd; font-size:.85em; }
+  .dot       { display:inline-block; width:8px; height:8px; border-radius:50%;
+               background:#adb5bd; transition:background .2s; }
+  .dot.on    { background:#198754; }
+  .badge-queued          { background:#6c757d !important; }
+  .badge-processing      { background:#0d6efd !important; }
+  .badge-done            { background:#198754 !important; }
+  .badge-done_with_errors{ background:#fd7e14 !important; }
+  .badge-failed          { background:#dc3545 !important; }
+</style>
+</head>
+<body>
+
+<nav class="navbar px-3 py-2 mb-4">
+  <span class="text-white fw-semibold">ocrserver</span>
+  <div class="text-white-50 small d-flex gap-3 align-items-center">
+    <span>uptime <span id="uptime" class="text-white">—</span></span>
+    <span>concurrency <span id="concurrency" class="text-white">—</span></span>
+    <span><span class="dot" id="dot"></span> 5s</span>
+  </div>
+</nav>
+
+<div class="container-fluid px-4" style="max-width:1200px">
+
+  <!-- stat cards -->
+  <div class="row g-3 mb-4">
+    <div class="col"><div class="card stat-card p-3 text-center bg-white">
+      <div class="stat-val text-secondary" id="s-total">—</div>
+      <div class="text-muted small mt-1">전체</div>
+    </div></div>
+    <div class="col"><div class="card stat-card p-3 text-center bg-white">
+      <div class="stat-val text-primary" id="s-active">—</div>
+      <div class="text-muted small mt-1">처리 중</div>
+    </div></div>
+    <div class="col"><div class="card stat-card p-3 text-center bg-white">
+      <div class="stat-val text-success" id="s-done">—</div>
+      <div class="text-muted small mt-1">완료</div>
+    </div></div>
+    <div class="col"><div class="card stat-card p-3 text-center bg-white">
+      <div class="stat-val text-warning" id="s-err">—</div>
+      <div class="text-muted small mt-1">일부 오류</div>
+    </div></div>
+    <div class="col"><div class="card stat-card p-3 text-center bg-white">
+      <div class="stat-val text-danger" id="s-failed">—</div>
+      <div class="text-muted small mt-1">실패</div>
+    </div></div>
+  </div>
+
+  <!-- job table -->
+  <div class="card table-card bg-white mb-4">
+    <div class="card-body p-0">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th class="ps-4" style="width:30%">파일명</th>
+            <th style="width:11%">Job ID</th>
+            <th style="width:11%">상태</th>
+            <th style="width:18%">진행</th>
+            <th style="width:16%">제출 시각</th>
+            <th style="width:9%">소요</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- detail panel -->
+  <div id="detail" class="p-4 d-none mb-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <div>
+        <span class="fw-semibold fs-6" id="det-filename"></span>
+        <code class="ms-2 fs-6" id="det-jobid"></code>
+      </div>
+      <button class="btn btn-sm btn-outline-secondary" onclick="closeDetail()">닫기</button>
+    </div>
+    <div id="det-pages"></div>
+  </div>
+
+</div>
+
+<script>
+let sel = null;
+
+const fmt = {
+  time(ts) {
+    if (!ts) return '—';
+    return new Date(ts * 1000).toLocaleString('ko-KR',
+      {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  },
+  dur(a, b) {
+    if (!b) return '—';
+    const s = b - a;
+    return s < 60 ? `${s.toFixed(0)}s` : `${Math.floor(s/60)}m ${Math.floor(s%60)}s`;
+  },
+  uptime(s) {
+    if (s < 60)   return `${s}s`;
+    if (s < 3600) return `${Math.floor(s/60)}m`;
+    return `${Math.floor(s/3600)}h ${Math.floor(s%3600/60)}m`;
+  },
+};
+
+function badge(st) {
+  const lbl = {queued:'대기',processing:'처리 중',done:'완료',
+               done_with_errors:'일부 오류',failed:'실패'};
+  return `<span class="badge badge-${st}">${lbl[st]||st}</span>`;
+}
+
+function trunc(s, n) { return s.length > n ? s.slice(0,n)+'…' : s; }
+
+async function refresh() {
+  const dot = document.getElementById('dot');
+  dot.classList.add('on');
+  setTimeout(() => dot.classList.remove('on'), 300);
+
+  try {
+    const [sr, jr] = await Promise.all([fetch('/api/stats'), fetch('/ocr')]);
+    const st = await sr.json(), jobs = await jr.json();
+    const c = st.counts;
+
+    document.getElementById('s-total').textContent    = c.total;
+    document.getElementById('s-active').textContent   = c.processing + c.queued;
+    document.getElementById('s-done').textContent     = c.done;
+    document.getElementById('s-err').textContent      = c.done_with_errors;
+    document.getElementById('s-failed').textContent   = c.failed;
+    document.getElementById('uptime').textContent     = fmt.uptime(st.uptime_s);
+    document.getElementById('concurrency').textContent = st.concurrency;
+
+    document.getElementById('tbody').innerHTML = jobs.map(j => {
+      const pct = j.total_pages ? Math.round(j.done_pages / j.total_pages * 100) : 0;
+      const prog = j.total_pages
+        ? `<div class="progress mb-1"><div class="progress-bar bg-success" style="width:${pct}%"></div></div>
+           <div class="text-muted" style="font-size:.75em">${j.done_pages} / ${j.total_pages}</div>`
+        : '<span class="text-muted small">—</span>';
+      return `<tr data-id="${j.job_id}" ${j.job_id===sel?'class="selected"':''} onclick="selectJob('${j.job_id}')">
+        <td class="ps-4" title="${j.filename||''}">${trunc(j.filename||'—', 40)}</td>
+        <td><code>${j.job_id.slice(0,8)}</code></td>
+        <td>${badge(j.status)}</td>
+        <td>${prog}</td>
+        <td class="small text-secondary">${fmt.time(j.submitted_at)}</td>
+        <td class="small text-secondary">${fmt.dur(j.submitted_at, j.completed_at)}</td>
+      </tr>`;
+    }).join('');
+
+    if (sel) refreshDetail();
+  } catch(e) { console.error(e); }
+}
+
+async function selectJob(id) {
+  if (sel === id) { closeDetail(); return; }
+  sel = id;
+  document.getElementById('detail').classList.remove('d-none');
+  await refreshDetail();
+}
+
+async function refreshDetail() {
+  if (!sel) return;
+  try {
+    const j = await (await fetch(`/ocr/${sel}`)).json();
+    document.getElementById('det-filename').textContent = j.filename || '';
+    document.getElementById('det-jobid').textContent = j.job_id;
+
+    const rows = (j.pages || []).map((p, i) => {
+      if (!p)
+        return `<tr><td>${i}</td><td class="text-muted">대기 중</td><td>—</td><td>—</td></tr>`;
+      const preview = (p.markdown||'').replace(/</g,'&lt;').slice(0,120);
+      if (p.status === 'ok')
+        return `<tr>
+          <td class="text-center">${i}</td>
+          <td><span class="badge bg-success">완료</span></td>
+          <td class="text-secondary small">${p.duration_ms}ms</td>
+          <td class="small text-secondary" style="max-width:500px;overflow:hidden;white-space:nowrap">${preview}</td>
+        </tr>`;
+      return `<tr>
+        <td class="text-center">${i}</td>
+        <td><span class="badge bg-danger">실패</span></td>
+        <td class="text-secondary small">${p.duration_ms}ms</td>
+        <td class="small text-danger">${(p.error||'').replace(/</g,'&lt;')}</td>
+      </tr>`;
+    });
+
+    document.getElementById('det-pages').innerHTML =
+      `<table class="table table-sm table-bordered mb-0">
+        <thead class="table-light">
+          <tr>
+            <th style="width:60px" class="text-center">페이지</th>
+            <th style="width:80px">상태</th>
+            <th style="width:80px">소요</th>
+            <th>미리보기</th>
+          </tr>
+        </thead>
+        <tbody>${rows.join('')}</tbody>
+      </table>`;
+  } catch(e) { console.error(e); }
+}
+
+function closeDetail() {
+  sel = null;
+  document.getElementById('detail').classList.add('d-none');
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
