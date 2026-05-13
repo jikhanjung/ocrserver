@@ -70,6 +70,19 @@ async def db_find_done_by_hash(file_hash: str) -> dict | None:
     return await db_get_job(row["job_id"]) if row else None
 
 
+async def db_find_done_by_filename(filename: str, file_hash: str) -> dict | None:
+    async with _db.execute(
+        "SELECT job_id FROM jobs WHERE filename=? AND file_hash IS NULL AND status='done' ORDER BY completed_at DESC LIMIT 1",
+        (filename,),
+    ) as c:
+        row = await c.fetchone()
+    if not row:
+        return None
+    await _db.execute("UPDATE jobs SET file_hash=? WHERE job_id=?", (file_hash, row["job_id"]))
+    await _db.commit()
+    return await db_get_job(row["job_id"])
+
+
 async def db_create_job(job_id: str, filename: str, file_hash: str, submitted_at: float) -> None:
     await _db.execute(
         "INSERT INTO jobs (job_id, filename, file_hash, status, submitted_at) VALUES (?,?,?,'queued',?)",
@@ -215,7 +228,10 @@ async def submit(background_tasks: BackgroundTasks, file: UploadFile = File(...)
         with open(pdf_path, "wb") as f:
             f.write(pdf_bytes)
 
-    existing = await db_find_done_by_hash(file_hash)
+    existing = (
+        await db_find_done_by_hash(file_hash) or
+        await db_find_done_by_filename(file.filename, file_hash)
+    )
     if existing:
         return {"job_id": existing["job_id"], "cached": True}
 
