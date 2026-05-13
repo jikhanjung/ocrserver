@@ -13,6 +13,7 @@ from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse
 
 DB_PATH = os.getenv("DB_PATH", "/data/ocrserver.db")
+PDF_DIR = os.getenv("PDF_DIR", "/data/pdfs")
 VLLM_URL = os.getenv("VLLM_URL", "http://nginx:80")
 VLLM_MODEL = os.getenv("VLLM_MODEL", "chandra")
 CONCURRENCY = int(os.getenv("OCR_CONCURRENCY", "12"))
@@ -130,6 +131,7 @@ async def lifespan(app: FastAPI):
     global _sem, _db
     _sem = asyncio.Semaphore(CONCURRENCY)
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    os.makedirs(PDF_DIR, exist_ok=True)
     _db = await aiosqlite.connect(DB_PATH)
     _db.row_factory = aiosqlite.Row
     await db_init()
@@ -207,6 +209,11 @@ async def api_stats():
 async def submit(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     pdf_bytes = await file.read()
     file_hash = hashlib.sha256(pdf_bytes).hexdigest()
+
+    pdf_path = os.path.join(PDF_DIR, f"{file_hash}.pdf")
+    if not os.path.exists(pdf_path):
+        with open(pdf_path, "wb") as f:
+            f.write(pdf_bytes)
 
     existing = await db_find_done_by_hash(file_hash)
     if existing:
