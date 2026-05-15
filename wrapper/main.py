@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 import aiosqlite
 import fitz
 import httpx
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse
 
 DB_PATH = os.getenv("DB_PATH", "/data/ocrserver.db")
@@ -58,23 +58,29 @@ async def db_init() -> None:
         cols = {row[1] for row in await c.fetchall()}
     if "file_hash" not in cols:
         await _db.execute("ALTER TABLE jobs ADD COLUMN file_hash TEXT")
+    if "client_id" not in cols:
+        await _db.execute("ALTER TABLE jobs ADD COLUMN client_id TEXT")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_file_hash ON jobs(file_hash)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_client_id ON jobs(client_id)")
     await _db.commit()
 
 
-async def db_find_done_by_hash(file_hash: str) -> dict | None:
+async def db_find_done_by_hash(file_hash: str, client_id: str | None) -> dict | None:
     async with _db.execute(
-        "SELECT job_id FROM jobs WHERE file_hash=? AND status='done' ORDER BY completed_at DESC LIMIT 1",
-        (file_hash,),
+        "SELECT job_id FROM jobs WHERE file_hash=? AND client_id IS ? AND status='done' "
+        "ORDER BY completed_at DESC LIMIT 1",
+        (file_hash, client_id),
     ) as c:
         row = await c.fetchone()
     return await db_get_job(row["job_id"]) if row else None
 
 
-async def db_find_done_by_filename(filename: str, total_pages: int, file_hash: str) -> dict | None:
+async def db_find_done_by_filename(filename: str, total_pages: int, file_hash: str,
+                                   client_id: str | None) -> dict | None:
     async with _db.execute(
-        "SELECT job_id FROM jobs WHERE filename=? AND total_pages=? AND file_hash IS NULL AND status='done' ORDER BY completed_at DESC LIMIT 1",
-        (filename, total_pages),
+        "SELECT job_id FROM jobs WHERE filename=? AND total_pages=? AND file_hash IS NULL "
+        "AND client_id IS ? AND status='done' ORDER BY completed_at DESC LIMIT 1",
+        (filename, total_pages, client_id),
     ) as c:
         row = await c.fetchone()
     if not row:
@@ -84,10 +90,12 @@ async def db_find_done_by_filename(filename: str, total_pages: int, file_hash: s
     return await db_get_job(row["job_id"])
 
 
-async def db_create_job(job_id: str, filename: str, file_hash: str, submitted_at: float) -> None:
+async def db_create_job(job_id: str, filename: str, file_hash: str, client_id: str | None,
+                        submitted_at: float) -> None:
     await _db.execute(
-        "INSERT INTO jobs (job_id, filename, file_hash, status, submitted_at) VALUES (?,?,?,'queued',?)",
-        (job_id, filename, file_hash, submitted_at),
+        "INSERT INTO jobs (job_id, filename, file_hash, client_id, status, submitted_at) "
+        "VALUES (?,?,?,?,'queued',?)",
+        (job_id, filename, file_hash, client_id, submitted_at),
     )
     await _db.commit()
 
@@ -128,12 +136,15 @@ async def db_get_job(job_id: str) -> dict | None:
     return job
 
 
-async def db_list_jobs() -> list[dict]:
-    async with _db.execute(
-        "SELECT job_id,filename,status,submitted_at,completed_at,"
-        "total_pages,done_pages,failed_pages,error "
-        "FROM jobs ORDER BY submitted_at DESC"
-    ) as c:
+async def db_list_jobs(client_id: str | None = None) -> list[dict]:
+    sql = ("SELECT job_id,filename,client_id,status,submitted_at,completed_at,"
+           "total_pages,done_pages,failed_pages,error FROM jobs")
+    params: tuple = ()
+    if client_id is not None:
+        sql += " WHERE client_id=?"
+        params = (client_id,)
+    sql += " ORDER BY submitted_at DESC"
+    async with _db.execute(sql, params) as c:
         rows = await c.fetchall()
     return [dict(r) for r in rows]
 
@@ -220,7 +231,14 @@ async def api_stats():
 
 
 @app.post("/ocr")
-async def submit(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def submit(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    client_id: str | None = Form(None),
+    x_client_id: str | None = Header(None),
+):
+    if client_id is None:
+        client_id = x_client_id
     pdf_bytes = await file.read()
     file_hash = hashlib.sha256(pdf_bytes).hexdigest()
 
@@ -237,8 +255,8 @@ async def submit(background_tasks: BackgroundTasks, file: UploadFile = File(...)
             f.write(pdf_bytes)
 
     existing = (
-        await db_find_done_by_hash(file_hash) or
-        await db_find_done_by_filename(file.filename, total_pages, file_hash)
+        await db_find_done_by_hash(file_hash, client_id) or
+        await db_find_done_by_filename(file.filename, total_pages, file_hash, client_id)
     )
     if existing:
         return {"job_id": existing["job_id"], "cached": True}
@@ -249,6 +267,7 @@ async def submit(background_tasks: BackgroundTasks, file: UploadFile = File(...)
         "job_id": job_id,
         "filename": file.filename,
         "file_hash": file_hash,
+        "client_id": client_id,
         "status": "queued",
         "submitted_at": now,
         "total_pages": 0,
@@ -256,14 +275,14 @@ async def submit(background_tasks: BackgroundTasks, file: UploadFile = File(...)
         "failed_pages": 0,
         "pages": [],
     }
-    await db_create_job(job_id, file.filename, file_hash, now)
+    await db_create_job(job_id, file.filename, file_hash, client_id, now)
     background_tasks.add_task(_run, job_id, pdf_bytes)
     return {"job_id": job_id, "cached": False}
 
 
 @app.get("/ocr")
-async def list_jobs():
-    db_jobs = await db_list_jobs()
+async def list_jobs(client_id: str | None = Query(None)):
+    db_jobs = await db_list_jobs(client_id=client_id)
     result = []
     for j in db_jobs:
         jid = j["job_id"]

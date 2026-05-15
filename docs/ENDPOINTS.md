@@ -34,16 +34,18 @@ PDF를 통째로 보내면 비동기로 처리해 결과를 반환한다.
 |---|---|---|
 | `POST` | `/ocr` | PDF 제출, job_id 즉시 반환 |
 | `GET` | `/ocr/{job_id}` | Job 상태 및 전체 결과 조회 |
-| `GET` | `/ocr` | 전체 Job 목록 조회 |
+| `GET` | `/ocr` | 전체 Job 목록 조회 (`?client_id=...` 필터) |
 | `GET` | `/api/stats` | 처리 통계 (완료/실패/처리중 건수) |
 | `GET` | `/` | 웹 대시보드 |
 
 ### 빠른 사용법
 
 ```bash
-# PDF 제출
+# PDF 제출 (client_id는 form 또는 X-Client-ID 헤더로 전달 가능, 둘 다 선택사항)
 JOB=$(curl -s -X POST http://localhost:8080/ocr \
-  -F "file=@paper.pdf" | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
+  -F "file=@paper.pdf" \
+  -F "client_id=papermeister" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
 echo "job_id: $JOB"
 
 # 완료 대기 (폴링)

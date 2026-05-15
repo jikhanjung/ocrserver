@@ -30,19 +30,43 @@ Content-Type: multipart/form-data
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
 | `file` | binary | ✓ | PDF 파일 (최대 200MB) |
+| `client_id` | string | – | 호출자 식별자. 미지정 시 dedup 키는 NULL. 헤더 대신 사용 가능 |
+
+`client_id`는 form 필드 대신 **`X-Client-ID` HTTP 헤더**로도 전달할 수 있다. 둘 다 보낼 경우 form 필드가 우선한다.
 
 ### Response `200 OK`
 
 ```json
 {
-  "job_id": "b41c324a-941c-41f6-bae3-efba4f9c44a4"
+  "job_id": "b41c324a-941c-41f6-bae3-efba4f9c44a4",
+  "cached": false
 }
 ```
+
+| 필드 | 설명 |
+|---|---|
+| `job_id` | Job 식별자 (UUID v4) |
+| `cached` | `true`면 동일 PDF의 기존 완료 결과를 그대로 반환(신규 OCR 미수행). 아래 **중복 제거** 참조 |
+
+### 중복 제거 (dedup)
+
+같은 `(file_hash, client_id)` 조합으로 이전에 완료(`status='done'`)된 job이 있으면 그 `job_id`를 그대로 돌려준다(GPU 시간 절약). `client_id`가 다르면 같은 PDF여도 **별개 job으로 새로 처리**된다. `client_id` 미지정(NULL)끼리도 서로 dedup된다.
 
 ### 예시
 
 ```bash
+# 익명 (client_id 없이)
 curl -X POST http://localhost:8080/ocr \
+  -F "file=@paper.pdf"
+
+# form 필드로 client_id 지정
+curl -X POST http://localhost:8080/ocr \
+  -F "file=@paper.pdf" \
+  -F "client_id=papermeister"
+
+# 헤더로 client_id 지정
+curl -X POST http://localhost:8080/ocr \
+  -H "X-Client-ID: papermeister" \
   -F "file=@paper.pdf"
 ```
 
@@ -58,6 +82,7 @@ Job 상태와 전체 결과(pages 포함)를 반환한다.
 {
   "job_id": "b41c324a-941c-41f6-bae3-efba4f9c44a4",
   "filename": "paper.pdf",
+  "client_id": "papermeister",
   "status": "done",
   "submitted_at": 1778650895.506,
   "total_pages": 15,
@@ -134,6 +159,12 @@ curl -s http://localhost:8080/ocr/<job_id> \
 
 전체 Job 목록을 반환한다. `pages` 배열은 포함되지 않는다.
 
+### Query parameters
+
+| 이름 | 타입 | 설명 |
+|---|---|---|
+| `client_id` | string | 지정 시 해당 client의 job만 반환. 미지정 시 전체 반환(NULL 포함) |
+
 ### Response `200 OK`
 
 ```json
@@ -141,6 +172,7 @@ curl -s http://localhost:8080/ocr/<job_id> \
   {
     "job_id": "b41c324a-...",
     "filename": "paper.pdf",
+    "client_id": "papermeister",
     "status": "done",
     "submitted_at": 1778650895.506,
     "total_pages": 15,
@@ -150,6 +182,16 @@ curl -s http://localhost:8080/ocr/<job_id> \
 ]
 ```
 
+### 예시
+
+```bash
+# 전체
+curl http://localhost:8080/ocr
+
+# 특정 client
+curl 'http://localhost:8080/ocr?client_id=papermeister'
+```
+
 ---
 
 ## 폴링 패턴
@@ -157,8 +199,12 @@ curl -s http://localhost:8080/ocr/<job_id> \
 ```python
 import time, requests
 
-# 1. 제출
-res = requests.post("http://localhost:8080/ocr", files={"file": open("paper.pdf", "rb")})
+# 1. 제출 (client_id 선택)
+res = requests.post(
+    "http://localhost:8080/ocr",
+    files={"file": open("paper.pdf", "rb")},
+    data={"client_id": "papermeister"},   # 또는 headers={"X-Client-ID": "..."}
+)
 job_id = res.json()["job_id"]
 
 # 2. 완료 대기
@@ -185,9 +231,13 @@ for page in job["pages"]:
 | `VLLM_MODEL` | `chandra` | 모델명 |
 | `OCR_CONCURRENCY` | `12` | vLLM에 동시 전송할 최대 페이지 수 |
 | `OCR_DPI` | `150` | PDF 렌더링 해상도 |
+| `OCR_MAX_PAGE_PX` | `2200` | 페이지 longest side 픽셀 상한. 초과 시 비례 축소 (vLLM `max_model_len` 보호) |
+| `DB_PATH` | `/data/ocrserver.db` | SQLite 파일 경로 |
+| `PDF_DIR` | `/data/pdfs` | 업로드 PDF 보관 디렉토리 |
 
 ## 제약 사항
 
-- Job 결과는 **메모리에만 저장**됨 — wrapper 컨테이너 재시작 시 초기화
-- **인증 없음** — 내부망 전용. 외부 노출 시 별도 인증 레이어 필요
+- Job 메타데이터·페이지 결과는 SQLite(`DB_PATH`)에 영속 저장됨. wrapper 컨테이너 재시작 후에도 조회 가능
+- 단, 재시작 시 in-flight `processing` job은 자동 재개되지 않음 (DB에는 `processing`으로 남음)
+- **인증 없음** — 내부망 전용. 외부 노출 시 별도 인증 레이어 필요. `client_id`는 단순 식별자이며 검증되지 않음
 - 502/503 오류 시 자동 재시도 (5s → 15s → 30s → 60s, 최대 4회)
