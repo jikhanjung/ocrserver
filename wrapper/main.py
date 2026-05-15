@@ -163,6 +163,7 @@ async def lifespan(app: FastAPI):
     _db = await aiosqlite.connect(DB_PATH)
     _db.row_factory = aiosqlite.Row
     await db_init()
+    await _resume_processing_jobs()
     yield
     await _db.close()
 
@@ -367,7 +368,10 @@ async def health():
 
 # ── Background processing ─────────────────────────────────────────────────────
 
-async def _run(job_id: str, pdf_bytes: bytes) -> None:
+async def _run(job_id: str, pdf_bytes: bytes, skip_pages: set[int] | None = None) -> None:
+    """Process all pages of a PDF. If skip_pages is given, those page indices
+    are not re-rendered or re-submitted (used by lifespan resume)."""
+    skip_pages = skip_pages or set()
     job = _jobs[job_id]
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -378,21 +382,25 @@ async def _run(job_id: str, pdf_bytes: bytes) -> None:
         return
 
     n = len(doc)
-    job.update(total_pages=n, status="processing", pages=[None] * n)
-    await db_update_job(job_id, status="processing", total_pages=n)
+    if not skip_pages:
+        # fresh job: initialize page array & total_pages in DB
+        job.update(total_pages=n, status="processing", pages=[None] * n)
+        await db_update_job(job_id, status="processing", total_pages=n)
 
-    pages_b64 = []
+    todo: list[tuple[int, str]] = []
     for i in range(n):
+        if i in skip_pages:
+            continue
         page = doc[i]
         long_pt = max(page.rect.width, page.rect.height)
         dpi = min(DPI, MAX_PAGE_PX * 72 / long_pt) if long_pt > 0 else DPI
         zoom = dpi / 72
         pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-        pages_b64.append(base64.b64encode(pix.tobytes("jpeg")).decode())
+        todo.append((i, base64.b64encode(pix.tobytes("jpeg")).decode()))
     doc.close()
 
     async with httpx.AsyncClient(timeout=3000) as client:
-        await asyncio.gather(*[_ocr_page(job, i, b64, client) for i, b64 in enumerate(pages_b64)])
+        await asyncio.gather(*[_ocr_page(job, i, b64, client) for i, b64 in todo])
 
     completed_at = time.time()
     status = "done" if job["failed_pages"] == 0 else "done_with_errors"
@@ -402,6 +410,75 @@ async def _run(job_id: str, pdf_bytes: bytes) -> None:
         done_pages=job["done_pages"], failed_pages=job["failed_pages"],
         completed_at=completed_at,
     )
+
+
+async def _resume_processing_jobs() -> None:
+    """On wrapper startup, re-spawn _run for any DB row stuck in 'processing'.
+    Pages already marked 'ok' are skipped; failed/missing pages are re-rendered."""
+    async with _db.execute(
+        "SELECT job_id, filename, file_hash, client_id, total_pages, submitted_at "
+        "FROM jobs WHERE status='processing'"
+    ) as c:
+        rows = [dict(r) for r in await c.fetchall()]
+
+    for row in rows:
+        jid = row["job_id"]
+        fh = row["file_hash"]
+        if not fh:
+            await db_update_job(jid, status="failed",
+                                error="resume failed: no file_hash",
+                                completed_at=time.time())
+            continue
+        path = os.path.join(PDF_DIR, f"{fh}.pdf")
+        if not os.path.exists(path):
+            await db_update_job(jid, status="failed",
+                                error=f"resume failed: missing {path}",
+                                completed_at=time.time())
+            continue
+
+        # Restore page-level state from DB
+        async with _db.execute(
+            "SELECT page_num, status, duration_ms, markdown, error FROM pages WHERE job_id=?",
+            (jid,),
+        ) as c2:
+            page_rows = [dict(r) for r in await c2.fetchall()]
+        done_set = {p["page_num"] for p in page_rows if p["status"] == "ok"}
+
+        n = row["total_pages"] or 0
+        pages = [None] * n
+        for p in page_rows:
+            i = p["page_num"]
+            if i >= n:
+                continue
+            entry = {"page": i, "status": p["status"], "duration_ms": p["duration_ms"]}
+            if p["status"] == "ok":
+                entry["markdown"] = p["markdown"]
+            else:
+                entry["error"] = p["error"]
+            # Only keep 'ok' entries; failed slots stay None so _ocr_page will refill
+            pages[i] = entry if p["status"] == "ok" else None
+
+        with open(path, "rb") as f:
+            pdf_bytes = f.read()
+
+        _jobs[jid] = {
+            "job_id": jid,
+            "filename": row["filename"],
+            "file_hash": fh,
+            "client_id": row.get("client_id"),
+            "status": "processing",
+            "submitted_at": row.get("submitted_at") or time.time(),
+            "total_pages": n,
+            "done_pages": len(done_set),
+            "failed_pages": 0,
+            "pages": pages,
+        }
+        # Reset failed_pages count in DB to 0 since we're re-attempting them
+        await db_update_job(jid, done_pages=len(done_set), failed_pages=0)
+        asyncio.create_task(_run(jid, pdf_bytes, skip_pages=done_set))
+
+    if rows:
+        print(f"[resume] re-spawned {len(rows)} 'processing' job(s)", flush=True)
 
 
 async def _ocr_page(job: dict, page_num: int, b64: str, client: httpx.AsyncClient) -> None:
