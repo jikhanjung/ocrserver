@@ -35,7 +35,8 @@ PDF를 통째로 보내면 비동기로 처리해 결과를 반환한다.
 | `POST` | `/ocr` | PDF 제출, job_id 즉시 반환 |
 | `GET` | `/ocr/{job_id}` | Job 상태 및 전체 결과 조회 |
 | `GET` | `/ocr` | 전체 Job 목록 조회 (`?client_id=...` 필터) |
-| `GET` | `/api/stats` | 처리 통계 (완료/실패/처리중 건수) |
+| `GET` | `/api/stats` | Job 카운트 + OCR backend capacity (`mode`, `recommended_concurrency`) |
+| `GET` | `/api/services` | 백엔드별 헬스 + capacity 상세 |
 | `GET` | `/` | 웹 대시보드 |
 
 ### 빠른 사용법
@@ -90,6 +91,19 @@ def ocr_pdf(path: str) -> list[dict]:
 pages = ocr_pdf("paper.pdf")
 text = "\n".join(p["markdown"] for p in pages if p and p["status"] == "ok")
 ```
+
+### 큐 깊이 자동 조정 (mode-aware)
+
+`/api/stats`의 `mode`/`recommended_concurrency`를 보면 서버가 OCR 전용(`2ocr`, 권장 12)인지 LLM 공유(`llm+ocr`, 권장 6)인지 알 수 있다. 클라이언트가 in-flight 페이지 수를 이 값에 맞추면 모드 전환 시 별도 설정 변경 없이 자동으로 throughput 추종.
+
+```python
+stats = requests.get("http://localhost:8080/api/stats").json()
+# {"mode": "2ocr", "recommended_concurrency": 12, "ocr_backends_alive": 2, ...}
+target_inflight = stats["recommended_concurrency"]
+# 큐에 target_inflight 미만 남으면 추가 PDF 제출
+```
+
+자세한 mode 라벨 종류와 각 필드 의미는 [`WRAPPER_API.md`](./WRAPPER_API.md#get-apistats) 참조.
 
 ---
 

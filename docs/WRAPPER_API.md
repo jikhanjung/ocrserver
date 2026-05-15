@@ -14,6 +14,8 @@ PDF 파일을 받아 페이지별 OCR을 수행하고 결과를 반환하는 비
 | `POST` | `/ocr` | PDF 제출, job_id 즉시 반환 |
 | `GET` | `/ocr/{job_id}` | Job 상태 및 결과 조회 |
 | `GET` | `/ocr` | 전체 Job 목록 조회 (pages 제외) |
+| `GET` | `/api/stats` | Job 카운트 통계 |
+| `GET` | `/api/services` | 백엔드 헬스 + OCR backend 가용성/권장 동시성 |
 
 ---
 
@@ -194,6 +196,98 @@ curl 'http://localhost:8080/ocr?client_id=papermeister'
 
 ---
 
+## GET /api/stats
+
+Job 카운트 + OCR 백엔드 capacity. 클라이언트가 자주 폴링해도 부담 없도록 백엔드 헬스 프로브 결과를 5초간 캐시한다.
+
+### Response `200 OK`
+
+```json
+{
+  "counts": {
+    "total": 143,
+    "queued": 0,
+    "processing": 2,
+    "done": 136,
+    "done_with_errors": 2,
+    "failed": 3
+  },
+  "ocr_backends_alive": 1,
+  "ocr_backends_total": 2,
+  "recommended_concurrency": 6,
+  "mode": "llm+ocr",
+  "uptime_s": 14,
+  "concurrency": 6,
+  "vllm_url": "http://nginx:80"
+}
+```
+
+| 필드 | 설명 |
+|---|---|
+| `counts` | status별 job 개수 |
+| `ocr_backends_alive` | health 200 응답한 OCR 백엔드 수 |
+| `ocr_backends_total` | 등록된 OCR 백엔드 수 (`OCR_BACKENDS` env) |
+| `recommended_concurrency` | 클라이언트가 채워둘 in-flight 페이지 권장값 = `alive × OCR_PER_BACKEND_CONCURRENCY` (기본 6) |
+| `mode` | 운영 모드 라벨 (아래 표) |
+| `concurrency` | wrapper 자신의 in-flight semaphore (백엔드 수와 무관, 별도 env로 설정) |
+
+#### `mode` 값
+
+GPU 2장 환경 기준 실제 등장하는 값은 다음과 같다.
+
+| 값 | 의미 | 비고 |
+|---|---|---|
+| `2ocr` | OCR 백엔드 2개 alive (LLM 없음) | `mode-ocr.sh` |
+| `llm+ocr` | OCR 1개 + LLM | `mode-llm.sh` (기본) |
+| `1ocr` | OCR 1개만 alive, LLM 없음 | OCR 모드에서 한쪽 다운 등 |
+| `llm` | OCR 없음, LLM만 alive | OCR 일시 다운 |
+| `down` | OCR 백엔드 없음 (LLM도 없음) | |
+
+### 클라이언트 사용 예 (큐 깊이 자동 조정)
+
+```python
+stats = requests.get("http://localhost:8080/api/stats").json()
+target_inflight = stats["recommended_concurrency"]   # 모드 따라 6 또는 12
+# 큐에 target_inflight 미만 남으면 추가 PDF 제출
+```
+
+---
+
+## GET /api/services
+
+`/api/stats`보다 상세한 백엔드별 헬스. 같은 캐시(5초 TTL) 공유.
+
+### Response `200 OK`
+
+```json
+{
+  "chandra": {"status": "ok", "http_status": 200},
+  "llm":     {"status": "ok", "http_status": 200},
+  "ocr_backends": {
+    "alive": 1,
+    "total": 2,
+    "per_backend_concurrency": 6,
+    "recommended_concurrency": 6,
+    "per_backend": {
+      "chandra-a": {"status": "ok", "http_status": 200},
+      "chandra-b": {"status": "down", "error": "..."}
+    }
+  },
+  "_meta": {
+    "chandra_url": "http://nginx:80/health",
+    "llm_url":     "http://nginx:80/llm/health",
+    "concurrency": 6,
+    "mode": "llm+ocr",
+    "probe_age_s": 0.3,
+    "uptime_s": 32
+  }
+}
+```
+
+`probe_age_s`로 캐시 freshness 확인 가능 (0~5).
+
+---
+
 ## 폴링 패턴
 
 ```python
@@ -229,9 +323,12 @@ for page in job["pages"]:
 |---|---|---|
 | `VLLM_URL` | `http://nginx:80` | vLLM 엔드포인트 |
 | `VLLM_MODEL` | `chandra` | 모델명 |
-| `OCR_CONCURRENCY` | `12` | vLLM에 동시 전송할 최대 페이지 수 |
+| `OCR_CONCURRENCY` | `12` | wrapper의 in-flight semaphore. vLLM에 동시 전송할 최대 페이지 수 |
 | `OCR_DPI` | `150` | PDF 렌더링 해상도 |
 | `OCR_MAX_PAGE_PX` | `2200` | 페이지 longest side 픽셀 상한. 초과 시 비례 축소 (vLLM `max_model_len` 보호) |
+| `OCR_BACKENDS` | `chandra-a,chandra-b` | health 프로브 대상 backend 컨테이너명(쉼표 구분) |
+| `OCR_BACKEND_PORT` | `8000` | 각 backend의 health 포트 |
+| `OCR_PER_BACKEND_CONCURRENCY` | `6` | backend 1개당 권장 동시성. `recommended_concurrency = alive × 이 값` |
 | `DB_PATH` | `/data/ocrserver.db` | SQLite 파일 경로 |
 | `PDF_DIR` | `/data/pdfs` | 업로드 PDF 보관 디렉토리 |
 

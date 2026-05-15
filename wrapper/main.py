@@ -19,6 +19,9 @@ VLLM_MODEL = os.getenv("VLLM_MODEL", "chandra")
 CONCURRENCY = int(os.getenv("OCR_CONCURRENCY", "12"))
 DPI = int(os.getenv("OCR_DPI", "150"))
 MAX_PAGE_PX = int(os.getenv("OCR_MAX_PAGE_PX", "2200"))  # cap longest side; chandra-ocr-2 max_model_len=12384
+OCR_BACKENDS = [s.strip() for s in os.getenv("OCR_BACKENDS", "chandra-a,chandra-b").split(",") if s.strip()]
+OCR_BACKEND_PORT = int(os.getenv("OCR_BACKEND_PORT", "8000"))
+OCR_PER_BACKEND_CONCURRENCY = int(os.getenv("OCR_PER_BACKEND_CONCURRENCY", "6"))
 _RETRY_DELAYS = [5, 15, 30, 60]
 
 _jobs: dict[str, dict] = {}
@@ -184,31 +187,80 @@ async def status_page():
     return _STATUS_PAGE
 
 
+async def _probe_url(client: httpx.AsyncClient, url: str) -> dict:
+    try:
+        r = await client.get(url)
+        return {"status": "ok" if r.status_code == 200 else "error",
+                "http_status": r.status_code}
+    except Exception as e:
+        return {"status": "down", "error": str(e)}
+
+
+# Cached snapshot of backend health, refreshed on demand at most every TTL seconds.
+# Shared by /api/stats (hot polled) and /api/services (detail view) so we don't
+# probe on every request.
+_PROBE_TTL = 5.0
+_probe_cache = {"at": 0.0, "ocr": {}, "ocr_alive": 0, "llm": None, "chandra": None}
+_probe_lock = asyncio.Lock()
+
+
+async def _refresh_probe_cache() -> dict:
+    if time.time() - _probe_cache["at"] < _PROBE_TTL:
+        return _probe_cache
+    async with _probe_lock:
+        if time.time() - _probe_cache["at"] < _PROBE_TTL:
+            return _probe_cache
+        llm_base = LLM_URL.rstrip("/") if LLM_URL else f"{VLLM_URL.rstrip('/')}/llm"
+        chandra_url = f"{VLLM_URL.rstrip('/')}/health"
+        llm_url = f"{llm_base}/health"
+        async with httpx.AsyncClient(timeout=2) as client:
+            chandra_res = await _probe_url(client, chandra_url)
+            llm_res = await _probe_url(client, llm_url)
+            ocr_results = {}
+            alive = 0
+            for name in OCR_BACKENDS:
+                res = await _probe_url(client, f"http://{name}:{OCR_BACKEND_PORT}/health")
+                ocr_results[name] = res
+                if res["status"] == "ok":
+                    alive += 1
+        _probe_cache.update(at=time.time(), ocr=ocr_results, ocr_alive=alive,
+                            llm=llm_res, chandra=chandra_res,
+                            chandra_url=chandra_url, llm_url=llm_url)
+    return _probe_cache
+
+
+def _mode_from_probes(cache: dict) -> str:
+    """Operational mode label inferred from which services are alive."""
+    n = cache["ocr_alive"]
+    llm_ok = bool(cache["llm"] and cache["llm"]["status"] == "ok")
+    if n == 0:
+        return "llm" if llm_ok else "down"
+    ocr_part = "ocr" if (n == 1 and llm_ok) else f"{n}ocr"
+    return f"llm+{ocr_part}" if llm_ok else ocr_part
+
+
 @app.get("/api/services")
 async def api_services():
-    llm_base = LLM_URL.rstrip("/") if LLM_URL else f"{VLLM_URL.rstrip('/')}/llm"
-    checks = {
-        "chandra": f"{VLLM_URL.rstrip('/')}/health",
-        "llm": f"{llm_base}/health",
+    cache = await _refresh_probe_cache()
+    return {
+        "chandra": cache["chandra"],
+        "llm": cache["llm"],
+        "ocr_backends": {
+            "alive": cache["ocr_alive"],
+            "total": len(OCR_BACKENDS),
+            "per_backend_concurrency": OCR_PER_BACKEND_CONCURRENCY,
+            "recommended_concurrency": cache["ocr_alive"] * OCR_PER_BACKEND_CONCURRENCY,
+            "per_backend": cache["ocr"],
+        },
+        "_meta": {
+            "chandra_url": cache.get("chandra_url"),
+            "llm_url": cache.get("llm_url"),
+            "concurrency": CONCURRENCY,
+            "mode": _mode_from_probes(cache),
+            "probe_age_s": round(time.time() - cache["at"], 1),
+            "uptime_s": int(time.time() - _start_time),
+        },
     }
-    results: dict[str, dict] = {}
-    async with httpx.AsyncClient(timeout=5) as client:
-        for name, url in checks.items():
-            try:
-                r = await client.get(url)
-                results[name] = {
-                    "status": "ok" if r.status_code == 200 else "error",
-                    "http_status": r.status_code,
-                }
-            except Exception as e:
-                results[name] = {"status": "down", "error": str(e)}
-    results["_meta"] = {
-        "chandra_url": checks["chandra"],
-        "llm_url": checks["llm"],
-        "concurrency": CONCURRENCY,
-        "uptime_s": int(time.time() - _start_time),
-    }
-    return results
 
 
 @app.get("/api/stats")
@@ -222,8 +274,13 @@ async def api_stats():
         s = j["status"]
         if s in counts:
             counts[s] += 1
+    cache = await _refresh_probe_cache()
     return {
         "counts": counts,
+        "ocr_backends_alive": cache["ocr_alive"],
+        "ocr_backends_total": len(OCR_BACKENDS),
+        "recommended_concurrency": cache["ocr_alive"] * OCR_PER_BACKEND_CONCURRENCY,
+        "mode": _mode_from_probes(cache),
         "uptime_s": int(time.time() - _start_time),
         "concurrency": CONCURRENCY,
         "vllm_url": VLLM_URL,

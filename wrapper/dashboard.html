@@ -38,6 +38,7 @@
     <a class="text-white-50 text-decoration-none" href="/status">서비스 상태</a>
     <span>uptime <span id="uptime" class="text-white">—</span></span>
     <span>concurrency <span id="concurrency" class="text-white">—</span></span>
+    <span title="alive/total OCR backends · 권장 동시성">OCR backends <span id="backends" class="text-white">—</span></span>
     <span><span class="dot" id="dot"></span> 5s</span>
   </div>
 </nav>
@@ -136,7 +137,9 @@ async function refresh() {
   setTimeout(() => dot.classList.remove('on'), 300);
 
   try {
-    const [sr, jr] = await Promise.all([fetch('/api/stats'), fetch('/ocr')]);
+    const [sr, jr, svr] = await Promise.all([
+      fetch('/api/stats'), fetch('/ocr'), fetch('/api/services').catch(() => null),
+    ]);
     const st = await sr.json(), jobs = await jr.json();
     const c = st.counts;
 
@@ -147,6 +150,15 @@ async function refresh() {
     document.getElementById('s-failed').textContent   = c.failed;
     document.getElementById('uptime').textContent     = fmt.uptime(st.uptime_s);
     document.getElementById('concurrency').textContent = st.concurrency;
+
+    if (svr && svr.ok) {
+      const sv = await svr.json();
+      const ob = sv.ocr_backends;
+      if (ob) {
+        document.getElementById('backends').textContent =
+          `${ob.alive}/${ob.total} · rec.${ob.recommended_concurrency}`;
+      }
+    }
 
     document.getElementById('tbody').innerHTML = jobs.map(j => {
       const pct = j.total_pages ? Math.round(j.done_pages / j.total_pages * 100) : 0;
