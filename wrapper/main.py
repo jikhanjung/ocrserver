@@ -18,6 +18,7 @@ VLLM_URL = os.getenv("VLLM_URL", "http://nginx:80")
 VLLM_MODEL = os.getenv("VLLM_MODEL", "chandra")
 CONCURRENCY = int(os.getenv("OCR_CONCURRENCY", "12"))
 DPI = int(os.getenv("OCR_DPI", "150"))
+MAX_PAGE_PX = int(os.getenv("OCR_MAX_PAGE_PX", "2200"))  # cap longest side; chandra-ocr-2 max_model_len=12384
 _RETRY_DELAYS = [5, 15, 30, 60]
 
 _jobs: dict[str, dict] = {}
@@ -304,11 +305,14 @@ async def _run(job_id: str, pdf_bytes: bytes) -> None:
     job.update(total_pages=n, status="processing", pages=[None] * n)
     await db_update_job(job_id, status="processing", total_pages=n)
 
-    mat = fitz.Matrix(DPI / 72, DPI / 72)
-    pages_b64 = [
-        base64.b64encode(doc[i].get_pixmap(matrix=mat).tobytes("jpeg")).decode()
-        for i in range(n)
-    ]
+    pages_b64 = []
+    for i in range(n):
+        page = doc[i]
+        long_pt = max(page.rect.width, page.rect.height)
+        dpi = min(DPI, MAX_PAGE_PX * 72 / long_pt) if long_pt > 0 else DPI
+        zoom = dpi / 72
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+        pages_b64.append(base64.b64encode(pix.tobytes("jpeg")).decode())
     doc.close()
 
     async with httpx.AsyncClient(timeout=3000) as client:
