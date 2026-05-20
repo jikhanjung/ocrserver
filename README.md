@@ -17,10 +17,10 @@ Requires NVIDIA driver + Docker + NVIDIA Container Toolkit on the host. See [doc
 
 ```bash
 # Build (downloads ~10-20GB of model weights into the image)
-docker build -t honestjung/ocrserver:latest .
+docker build -t honestjung/ocrserver:0.1.0 -t honestjung/ocrserver:latest .
 
 # Run on a single GPU (device 0)
-docker run --rm -it --gpus '"device=0"' -p 8000:8000 honestjung/ocrserver:latest
+docker run --rm -it --gpus '"device=0"' -p 8000:8000 honestjung/ocrserver:0.1.0
 ```
 
 Two-GPU pattern (one container per card):

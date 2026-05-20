@@ -11,7 +11,7 @@ services:
     restart: unless-stopped
 
   wrapper:
-    image: ocrserver-wrapper:latest
+    image: honestjung/ocrwrapper:0.1.0
     environment:
       VLLM_URL: http://nginx:80
       OCR_CONCURRENCY: "${OCR_CONCURRENCY:-6}"
@@ -24,7 +24,7 @@ services:
     restart: unless-stopped
 
   chandra-a:
-    image: honestjung/ocrserver:latest
+    image: honestjung/ocrserver:0.1.0
     deploy:
       resources:
         reservations:
@@ -46,7 +46,7 @@ services:
   # GPU 1 — OCR 모드 (mode-ocr.sh로 활성화)
   chandra-b:
     profiles: [ocr]
-    image: honestjung/ocrserver:latest
+    image: honestjung/ocrserver:0.1.0
     deploy:
       resources:
         reservations:
