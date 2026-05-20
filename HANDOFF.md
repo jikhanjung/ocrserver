@@ -22,8 +22,11 @@
 | `526755c`, `d14e923` | CLAUDE.md 신규 (세션 시작 시 HANDOFF.md 읽기 지시 + 프로젝트 개요) |
 | `17ec29b` | 헤더 통일(`#1a2f5a`), context-strip 분리, `/api/jobs` 페이지네이션, "메트릭"→"통계" 라벨 → 0.1.4 |
 | `91ede86` | wrapper 0.1.4 push 기록 |
+| `cdf99c8`, `53d5ea2` | HANDOFF 갱신 + 0.1.4 deploy |
+| `b54dd38` | CDN 4개 제거, bootstrap/chart.js/adapter 를 `wrapper/static/` 에 내장, nginx 에 `/static/` 라우트 추가 → 0.1.5 |
+| `45a5546` | wrapper 0.1.5 push 기록 |
 
-상세는 `devlog/20260520_013_*.md` ~ `_018_*.md`.
+상세는 `devlog/20260520_013_*.md` ~ `_019_*.md`.
 
 ## 현재 상태 (snapshot)
 
@@ -35,33 +38,54 @@
 ### 컨테이너 / 이미지
 ```
 SERVICE     IMAGE                         STATUS
-chandra-a   honestjung/ocrserver:0.1.0    Up 5h (healthy)
-chandra-b   honestjung/ocrserver:latest   Up 28h (이전 세션 시작분, profile=ocr)
-nginx       nginx:alpine                  Up 28h
-wrapper     honestjung/ocrwrapper:0.1.4   Up (방금 swap, 0.1.2 → 0.1.4)
+chandra-a   honestjung/ocrserver:0.1.0    Up 7h (healthy)
+chandra-b   honestjung/ocrserver:latest   Up 30h (이전 세션 시작분, profile=ocr)
+nginx       nginx:alpine                  Up 30h
+wrapper     honestjung/ocrwrapper:0.1.4   Up 2h  ← 운영 중 (0.1.5 빌드/push 했지만 미배포)
 ```
 
 - 빌드된 wrapper 태그: `0.1.0` (`5d6f28afa428`), `0.1.1` (`ec0e23a5b770`),
-  `0.1.2` (`ae365f7ab413`), `0.1.3` (`ebc4d672c9fa`), `0.1.4` (`fac3ca93673f`).
-  전부 Docker Hub `honestjung/ocrwrapper` 에 push 완료, `:latest` 는 0.1.4.
+  `0.1.2` (`ae365f7ab413`), `0.1.3` (`ebc4d672c9fa`), `0.1.4` (`fac3ca93673f`),
+  `0.1.5` (`17d5cfbefbb5`). 전부 Docker Hub `honestjung/ocrwrapper` 에 push
+  완료, `:latest` 는 0.1.5.
 - chandra 이미지는 `:0.1.0` 으로 로컬 retag 만, Hub push 안 함
   (7일 전 pull 본 digest 라 stale 가능성 — `feedback_retag_push_safety` 참고).
 
 ### 호스트 메트릭
 - `ocrserver-metrics.timer` 활성, 1분 주기 → `/srv/ocrserver/data/metrics.db`
-- 누적 행 473건 (오늘 ~8시간치)
+- 누적 행 619건 (오늘 ~10시간치)
 - wrapper 컨테이너는 read-only 로 `/data/metrics.db` mount 해서 `/api/metrics` 서빙
 
 ### 작업 상태 (`ocrserver.db.jobs`)
-- done: 2419, done_with_errors: 6, failed: 5, processing: 0
-- 모든 OCR 작업 완료, 새 wrapper 가 fresh 상태로 떠있음.
+- done: 2488, done_with_errors: 6, failed: 5, processing: 4
+- **현재 OCR 작업 진행 중** — `processing` 4건. 0.1.5 배포는 끝난 뒤 권장.
 
-### compose 파일 상태
-- dev tree 와 `/srv/ocrserver/` 모두 wrapper `0.1.4` 로 일치.
+### compose / nginx 파일 상태
+- dev tree: wrapper `0.1.5`, nginx conf 들이 `/static/` 라우트 추가된 새 버전.
+- `/srv/ocrserver/` : wrapper `0.1.4`, nginx conf 는 구버전 (`/static/` 없음).
+- 0.1.5 swap 직전에 docker-compose.yml **+ 두 nginx conf** 모두 sync 필요.
 
 ## 곧 해야 할 작업
 
-1. **chandra-b 이미지 표시 정렬** (선택)
+1. **OCR 작업 끝나면 wrapper 0.1.5 swap** (nginx conf 동기화 필수)
+   ```bash
+   # 1. compose + nginx conf sync
+   cp /home/jikhanjung/projects/ocrserver/docker-compose.yml /srv/ocrserver/
+   cp /home/jikhanjung/projects/ocrserver/nginx.ocr.conf /srv/ocrserver/
+   cp /home/jikhanjung/projects/ocrserver/nginx.llm.conf /srv/ocrserver/
+   cp /srv/ocrserver/nginx.ocr.conf /srv/ocrserver/nginx.conf  # 현재 OCR 모드
+
+   # 2. wrapper recreate + nginx reload
+   cd /srv/ocrserver && docker compose up -d wrapper \
+       && docker compose exec nginx nginx -s reload
+
+   # 3. 확인
+   curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/static/bootstrap.min.css
+   ```
+   nginx conf 를 sync 안 하면 `/static/*` 가 chandra 업스트림으로 떨어져
+   404 — UI 가 unstyled 로 뜸. devlog 019 참조.
+
+2. **chandra-b 이미지 표시 정렬** (선택)
    - chandra-b 가 IMAGE 컬럼에 `:latest` 로 표시되는데, 운영본 compose 는
      `:0.1.0` 으로 적어둠. 같은 digest 라 동작은 동일하지만 보기엔 어색.
    - `docker compose --profile ocr up -d chandra-b` 하면 desired tag 일치 위해
@@ -76,7 +100,7 @@ wrapper     honestjung/ocrwrapper:0.1.4   Up (방금 swap, 0.1.2 → 0.1.4)
 
 ## 참고 위치
 
-- 데브로그: `devlog/20260520_013_*.md` ~ `_018_*.md`
+- 데브로그: `devlog/20260520_013_*.md` ~ `_019_*.md`
 - 메모리(자동 컨텍스트): `~/.claude/projects/-home-jikhanjung-projects-ocrserver/memory/`
 - 메트릭 스크립트: `scripts/metrics_collector.py`, `scripts/systemd/`
 - 운영 명령:
