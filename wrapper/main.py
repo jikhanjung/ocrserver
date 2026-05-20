@@ -11,6 +11,7 @@ import fitz
 import httpx
 from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 DB_PATH = os.getenv("DB_PATH", "/data/ocrserver.db")
 METRICS_DB_PATH = os.getenv("METRICS_DB_PATH", "/data/metrics.db")
@@ -194,6 +195,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.mount(
+    "/static",
+    StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")),
+    name="static",
+)
 
 _DASHBOARD = open(os.path.join(os.path.dirname(__file__), "dashboard.html")).read()
 _STATUS_PAGE = open(os.path.join(os.path.dirname(__file__), "status.html")).read()
