@@ -94,7 +94,10 @@
     </div>
     <div class="col-lg-6">
       <div class="card chart-card">
-        <div class="card-header">OCR 처리량 <span class="unit">— 페이지/분(좌) · 문서/분(우)</span></div>
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <div>OCR 처리량 <span class="unit">— 페이지/분(좌) · 문서/분(우)</span></div>
+          <span class="unit" id="jobsAvg">평균 —</span>
+        </div>
         <div class="card-body"><div class="chart-wrap"><canvas id="chJobs"></canvas></div></div>
       </div>
     </div>
@@ -262,6 +265,22 @@ async function refresh() {
   charts.jobs.data.datasets[0].data = asPoints(ts, perMin(s.pages_per_step));
   charts.jobs.data.datasets[1].data = asPoints(ts, perMin(s.jobs_per_step));
   charts.jobs.update('none');
+
+  // Average over active buckets only — idle gaps shouldn't drag the rate down.
+  // Each bucket holds (count) finishes over (step) seconds, so per-bucket rate
+  // is count*60/step pages|jobs per minute.
+  function avgRate(arr) {
+    let total = 0, n = 0;
+    for (const v of arr) {
+      if (v && v > 0) { total += v; n++; }
+    }
+    return n > 0 ? (total / n) * 60 / step : null;
+  }
+  const fmtAvg = (rate, digits) => rate === null ? '—' : rate.toFixed(digits);
+  const avgPages = avgRate(s.pages_per_step);
+  const avgJobs  = avgRate(s.jobs_per_step);
+  document.getElementById('jobsAvg').textContent =
+    `활성 구간 평균 ${fmtAvg(avgPages, 1)} 페이지/분 · ${fmtAvg(avgJobs, 2)} 문서/분`;
 }
 
 document.querySelectorAll('.range-btn').forEach(btn => {
