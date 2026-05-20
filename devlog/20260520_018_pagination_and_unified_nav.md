@@ -56,7 +56,9 @@ processing 상태는 메모리 진행 상황이 DB 보다 신선.
 
 ## 배포
 
-이미지: `honestjung/ocrwrapper:0.1.4` (digest `fac3ca93673f...`).
+이미지: `honestjung/ocrwrapper:0.1.4` (digest `fac3ca93673f...`) —
+Docker Hub 에 `:0.1.4` + `:latest` 동시 push 완료.
+
 운영본 swap 은 진행 중인 OCR 끝난 뒤:
 
 ```bash
