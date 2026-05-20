@@ -42,7 +42,8 @@ chandra-a / chandra-b → GPU 0 / 1 매핑은 `docker-compose.yml` 의 `device_i
 
 ## 배포
 
-이미지: `honestjung/ocrwrapper:0.1.2` (id `ae365f7ab413`).
+이미지: `honestjung/ocrwrapper:0.1.2` (id `ae365f7ab413`) — Docker Hub 에
+`:0.1.2` + `:latest` 동시 push 완료.
 `docker-compose.yml` 의 `image:` 가 `:0.1.2` 로 갱신돼 있음. OCR 작업 끝나면:
 
 ```bash
