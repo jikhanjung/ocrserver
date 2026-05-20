@@ -52,4 +52,5 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/static/chart.umd.
 
 ## 이미지
 
-`honestjung/ocrwrapper:0.1.5` (digest `17d5cfbefbb5...`).
+`honestjung/ocrwrapper:0.1.5` (digest `17d5cfbefbb5...`) — Docker Hub 에
+`:0.1.5` + `:latest` 동시 push 완료.
