@@ -29,7 +29,8 @@ CREATE INDEX IF NOT EXISTS idx_pages_completed_at ON pages(completed_at);
 
 ## 배포
 
-이미지: `honestjung/ocrwrapper:0.1.1` (id `ec0e23a5b770`).
+이미지: `honestjung/ocrwrapper:0.1.1` (id `ec0e23a5b770`) — Docker Hub 에
+`:0.1.1` + `:latest` 동시 push 완료.
 
 운영 중 OCR 가 끝난 뒤 swap 예정:
 
