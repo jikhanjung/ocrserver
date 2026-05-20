@@ -38,10 +38,15 @@ cd /srv/ocrserver && docker compose up -d wrapper
 `:latest` 도 같이 태그하는 이유는 `docker-compose.local.yml` 의 `build:` 가
 이미지명 매핑 없이 돌 때 fallback 으로 잡히게 하기 위함.
 
-## 안 한 것
+## Push 상태
 
-- Docker Hub push: `honestjung/ocrserver:0.1.0` / `honestjung/ocrwrapper:0.1.0`
-  둘 다 로컬에만 있음. 다른 호스트에서 `docker pull` 할 일이 생기면 그때 push.
+- `honestjung/ocrwrapper:0.1.0` + `:latest` — Docker Hub 에 push 완료
+  (digest `sha256:5d6f28afa428...`).
+- `honestjung/ocrserver:0.1.0` — 로컬 retag 만, push 안 함. 7일 전 pull 한
+  `:latest` digest (`fbf29c4e9215`) 와 Hub 의 현재 `:latest` 일치 여부 미확인
+  이라 무분별한 push 회피. 다른 호스트에서 필요하면 그때 digest 확인 후 push.
+
+## 안 한 것
 - 기존 `ocrserver-wrapper:{latest,0.1.0}` 로컬 태그는 안전을 위해 안 지움
   (`docker rmi ocrserver-wrapper:latest ocrserver-wrapper:0.1.0` 로 정리 가능,
   동일 digest 라 다른 태그가 살아있으면 layer 안 지워짐).
