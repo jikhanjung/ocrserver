@@ -11,7 +11,7 @@
     .card { border: none; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
     .status-dot {
       display: inline-block;
-      width: 14px; height: 14px;
+      width: 10px; height: 10px;
       border-radius: 50%;
       margin-right: 6px;
       vertical-align: middle;
@@ -19,9 +19,31 @@
     .dot-ok      { background: #198754; }
     .dot-down    { background: #dc3545; }
     .dot-loading { background: #ffc107; }
+    .dot-idle    { background: #adb5bd; }
     .metric-label { font-size: .78rem; color: #6c757d; text-transform: uppercase; letter-spacing: .04em; }
     .metric-value { font-size: 1.5rem; font-weight: 700; line-height: 1.1; }
     .refresh-badge { font-size: .72rem; color: #adb5bd; }
+    .mode-chip {
+      display: inline-block;
+      padding: .25rem .7rem;
+      border-radius: 999px;
+      font-weight: 600;
+      font-size: .9rem;
+      background: #1a2f5a; color: #fff;
+    }
+    .mode-chip.muted { background: #adb5bd; }
+    .mode-chip.danger { background: #dc3545; }
+    .backend-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: .55rem .75rem;
+      border: 1px solid #eef0f3; border-radius: 8px;
+      margin-bottom: .35rem;
+    }
+    .backend-row .name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .backend-row .gpu  { color: #6c757d; font-size: .82rem; margin-left: .4rem; }
+    .backend-row .right { color: #6c757d; font-size: .85rem; }
+    .card.muted .card-body { opacity: .6; }
+    .info-note { font-size: .85rem; color: #6c757d; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
     .pulsing { animation: pulse 1.4s ease-in-out infinite; }
   </style>
@@ -38,83 +60,84 @@
   </div>
 </nav>
 
-<div class="container" style="max-width:860px">
+<div class="container" style="max-width:900px">
 
-  <!-- Service cards -->
-  <div class="row g-3 mb-4">
-
-    <!-- Chandra OCR -->
-    <div class="col-md-6">
-      <div class="card h-100">
-        <div class="card-body p-4">
-          <div class="d-flex justify-content-between align-items-start mb-3">
-            <div>
-              <h5 class="mb-0 fw-semibold">Chandra OCR</h5>
-              <div class="text-muted small mt-1">datalab-to/chandra-ocr-2 · GPU 0</div>
-            </div>
-            <span id="chandraStatus" class="badge fs-6 px-3 py-2">확인 중...</span>
-          </div>
-          <div class="row g-2 mt-1">
-            <div class="col-6">
-              <div class="metric-label">HTTP</div>
-              <div class="metric-value" id="chandraHttp">—</div>
-            </div>
-            <div class="col-6">
-              <div class="metric-label">엔드포인트</div>
-              <div class="text-muted small text-truncate" id="chandraUrl">—</div>
-            </div>
-          </div>
+  <!-- Mode summary -->
+  <div class="card mb-4">
+    <div class="card-body p-4 d-flex flex-wrap align-items-center gap-3">
+      <div>
+        <div class="metric-label">현재 모드</div>
+        <div class="mt-1"><span id="modeChip" class="mode-chip muted">확인 중...</span></div>
+      </div>
+      <div class="ms-md-4">
+        <div class="metric-label">가동 시간</div>
+        <div class="metric-value fs-5" id="uptime">—</div>
+      </div>
+      <div>
+        <div class="metric-label">동시성</div>
+        <div class="metric-value fs-5">
+          <span id="concurrency">—</span>
+          <span class="text-muted fs-6 fw-normal" id="concurrencyHint"></span>
+        </div>
+      </div>
+      <div>
+        <div class="metric-label">처리 중 / 총 Job</div>
+        <div class="metric-value fs-5">
+          <span id="processingJobs">—</span>
+          <span class="text-muted fs-6 fw-normal"> / <span id="totalJobs">—</span></span>
         </div>
       </div>
     </div>
-
-    <!-- LLM -->
-    <div class="col-md-6">
-      <div class="card h-100">
-        <div class="card-body p-4">
-          <div class="d-flex justify-content-between align-items-start mb-3">
-            <div>
-              <h5 class="mb-0 fw-semibold">Qwen3-14B LLM</h5>
-              <div class="text-muted small mt-1">Qwen/Qwen3-14B · GPU 1</div>
-            </div>
-            <span id="llmStatus" class="badge fs-6 px-3 py-2">확인 중...</span>
-          </div>
-          <div class="row g-2 mt-1">
-            <div class="col-6">
-              <div class="metric-label">HTTP</div>
-              <div class="metric-value" id="llmHttp">—</div>
-            </div>
-            <div class="col-6">
-              <div class="metric-label">엔드포인트</div>
-              <div class="text-muted small text-truncate" id="llmUrl">—</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
   </div>
 
-  <!-- Wrapper / system info -->
-  <div class="card mb-4">
+  <!-- OCR backends -->
+  <div class="card mb-4" id="ocrCard">
     <div class="card-body p-4">
-      <h6 class="fw-semibold mb-3">Wrapper 시스템</h6>
-      <div class="row g-3">
-        <div class="col-6 col-md-3">
-          <div class="metric-label">가동 시간</div>
-          <div class="metric-value fs-5" id="uptime">—</div>
+      <div class="d-flex justify-content-between align-items-start mb-3">
+        <div>
+          <h5 class="mb-0 fw-semibold">OCR 백엔드 <span class="text-muted fs-6 fw-normal">— Chandra (datalab-to/chandra-ocr-2)</span></h5>
+          <div class="info-note mt-1">활성 백엔드 수에 따라 동시 처리 가능 페이지 수가 결정됩니다.</div>
         </div>
-        <div class="col-6 col-md-3">
-          <div class="metric-label">동시성 (Semaphore)</div>
-          <div class="metric-value fs-5" id="concurrency">—</div>
+        <span id="ocrStatus" class="badge fs-6 px-3 py-2">확인 중...</span>
+      </div>
+
+      <div id="backendList"></div>
+
+      <div class="row g-3 mt-2">
+        <div class="col-sm-4">
+          <div class="metric-label">활성 / 전체</div>
+          <div class="metric-value fs-5"><span id="ocrAlive">—</span> / <span id="ocrTotal">—</span></div>
         </div>
-        <div class="col-6 col-md-3">
-          <div class="metric-label">총 Job</div>
-          <div class="metric-value fs-5" id="totalJobs">—</div>
+        <div class="col-sm-4">
+          <div class="metric-label">권장 동시성</div>
+          <div class="metric-value fs-5" id="ocrRecommended">—</div>
         </div>
-        <div class="col-6 col-md-3">
-          <div class="metric-label">처리 중</div>
-          <div class="metric-value fs-5" id="processingJobs">—</div>
+        <div class="col-sm-4">
+          <div class="metric-label">백엔드당 동시성</div>
+          <div class="metric-value fs-5" id="ocrPerBackend">—</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- LLM -->
+  <div class="card mb-4" id="llmCard">
+    <div class="card-body p-4">
+      <div class="d-flex justify-content-between align-items-start mb-3">
+        <div>
+          <h5 class="mb-0 fw-semibold">Qwen3-14B LLM <span class="text-muted fs-6 fw-normal">— Qwen/Qwen3-14B</span></h5>
+          <div class="info-note mt-1" id="llmHint">— </div>
+        </div>
+        <span id="llmStatus" class="badge fs-6 px-3 py-2">확인 중...</span>
+      </div>
+      <div class="row g-2 mt-1">
+        <div class="col-6">
+          <div class="metric-label">HTTP</div>
+          <div class="metric-value fs-5" id="llmHttp">—</div>
+        </div>
+        <div class="col-6">
+          <div class="metric-label">엔드포인트</div>
+          <div class="text-muted small text-truncate" id="llmUrl">—</div>
         </div>
       </div>
     </div>
@@ -124,19 +147,8 @@
   <div class="card mb-4">
     <div class="card-body p-4">
       <h6 class="fw-semibold mb-3">빠른 테스트</h6>
-      <div class="row g-2">
-        <div class="col-auto">
-          <button class="btn btn-sm btn-outline-secondary" onclick="testEndpoint('/health','chandraTest')">Chandra /health</button>
-          <span class="ms-2 text-muted small" id="chandraTest"></span>
-        </div>
-        <div class="col-auto">
-          <button class="btn btn-sm btn-outline-secondary" onclick="testEndpoint('/llm/health','llmTest')">LLM /llm/health</button>
-          <span class="ms-2 text-muted small" id="llmTest"></span>
-        </div>
-        <div class="col-auto">
-          <button class="btn btn-sm btn-outline-secondary" onclick="testEndpoint('/llm/v1/models','llmModels')">LLM /v1/models</button>
-          <span class="ms-2 text-muted small" id="llmModels"></span>
-        </div>
+      <div class="d-flex flex-wrap gap-2" id="quickTests">
+        <span class="info-note">모드 확인 중...</span>
       </div>
     </div>
   </div>
@@ -151,11 +163,78 @@ function fmt(s) {
   return Math.floor(s/3600) + '시간 ' + Math.floor((s%3600)/60) + '분';
 }
 
-function setBadge(el, status, code) {
+function setBadge(el, status, code, opts = {}) {
   el.className = 'badge fs-6 px-3 py-2';
-  if (status === 'ok') { el.classList.add('bg-success'); el.textContent = '정상 ✓'; }
-  else if (status === 'down') { el.classList.add('bg-danger'); el.textContent = '오프라인'; }
-  else { el.classList.add('bg-warning', 'text-dark'); el.textContent = '오류 ' + (code||''); }
+  if (status === 'ok')          { el.classList.add('bg-success');             el.textContent = '정상 ✓'; }
+  else if (status === 'idle')   { el.classList.add('bg-secondary');           el.textContent = opts.idleText || '비활성'; }
+  else if (status === 'down')   { el.classList.add('bg-danger');              el.textContent = '오프라인'; }
+  else if (status === 'partial'){ el.classList.add('bg-warning','text-dark'); el.textContent = '부분 가용'; }
+  else                          { el.classList.add('bg-warning','text-dark'); el.textContent = '오류 ' + (code||''); }
+}
+
+// chandra-a → GPU 0, chandra-b → GPU 1 (compose device_ids 약속)
+const GPU_FOR_BACKEND = { 'chandra-a': 'GPU 0', 'chandra-b': 'GPU 1' };
+
+function renderBackends(perBackend) {
+  const root = document.getElementById('backendList');
+  root.innerHTML = '';
+  const names = Object.keys(perBackend).sort();
+  if (!names.length) {
+    root.innerHTML = '<div class="info-note">백엔드 정보가 없습니다.</div>';
+    return;
+  }
+  for (const name of names) {
+    const r = perBackend[name];
+    const dotClass = r.status === 'ok' ? 'dot-ok' : 'dot-down';
+    const statusText = r.status === 'ok' ? `HTTP ${r.http_status ?? 200}`
+                                         : (r.error ? '연결 실패' : `HTTP ${r.http_status ?? '—'}`);
+    const gpu = GPU_FOR_BACKEND[name] || '';
+    const row = document.createElement('div');
+    row.className = 'backend-row';
+    row.innerHTML = `
+      <div>
+        <span class="status-dot ${dotClass}"></span>
+        <span class="name">${name}</span>
+        ${gpu ? `<span class="gpu">${gpu}</span>` : ''}
+      </div>
+      <div class="right">${statusText}</div>`;
+    root.appendChild(row);
+  }
+}
+
+function modeLabel(mode) {
+  // mode 값: down | llm | ocr | 2ocr | llm+ocr | llm+2ocr
+  if (mode === 'down')      return { text: '전체 오프라인',     cls: 'danger' };
+  if (mode === 'llm')       return { text: 'LLM 전용',          cls: '' };
+  if (mode === 'ocr')       return { text: 'OCR 1 GPU',         cls: '' };
+  if (mode === '2ocr')      return { text: 'OCR 2 GPU',         cls: '' };
+  if (mode === 'llm+ocr')   return { text: 'LLM + OCR 1 GPU',   cls: '' };
+  if (mode === 'llm+2ocr')  return { text: 'LLM + OCR 2 GPU',   cls: '' };
+  return { text: mode || '?', cls: 'muted' };
+}
+
+function renderQuickTests(mode) {
+  const llmActive = (mode || '').includes('llm');
+  // /health 는 nginx 가 chandra 업스트림으로 라우트 (chandra-a/b round-robin).
+  // wrapper /health 는 외부 노출 안 됨 — 이 페이지가 떠 있다는 자체가 wrapper 정상.
+  const buttons = [
+    ['Chandra /health', '/health', 'chandraTest'],
+  ];
+  if (llmActive) {
+    buttons.push(['LLM /llm/health', '/llm/health',    'llmTest']);
+    buttons.push(['LLM /v1/models',  '/llm/v1/models', 'llmModels']);
+  }
+  const root = document.getElementById('quickTests');
+  root.innerHTML = '';
+  for (const [label, path, target] of buttons) {
+    const wrap = document.createElement('div');
+    wrap.className = 'd-flex align-items-center gap-2';
+    wrap.innerHTML = `
+      <button class="btn btn-sm btn-outline-secondary">${label}</button>
+      <span class="text-muted small" id="${target}"></span>`;
+    wrap.querySelector('button').addEventListener('click', () => testEndpoint(path, target));
+    root.appendChild(wrap);
+  }
 }
 
 async function refresh() {
@@ -165,22 +244,62 @@ async function refresh() {
       fetch('/api/stats').then(r=>r.json()),
     ]);
 
-    const ch = svc.chandra || {};
-    setBadge(document.getElementById('chandraStatus'), ch.status, ch.http_status);
-    document.getElementById('chandraHttp').textContent = ch.http_status ?? '—';
-    document.getElementById('chandraUrl').textContent = svc._meta?.chandra_url ?? '—';
-    document.getElementById('chandraUrl').title = svc._meta?.chandra_url ?? '';
+    const mode = svc._meta?.mode || stats.mode || '?';
+    const ml = modeLabel(mode);
+    const chip = document.getElementById('modeChip');
+    chip.className = 'mode-chip' + (ml.cls ? ' ' + ml.cls : '');
+    chip.textContent = ml.text;
 
-    const llm = svc.llm || {};
-    setBadge(document.getElementById('llmStatus'), llm.status, llm.http_status);
-    document.getElementById('llmHttp').textContent = llm.http_status ?? '—';
-    document.getElementById('llmUrl').textContent = svc._meta?.llm_url ?? '—';
-    document.getElementById('llmUrl').title = svc._meta?.llm_url ?? '';
-
+    // Wrapper-level summary
     document.getElementById('uptime').textContent = fmt(svc._meta?.uptime_s ?? 0);
     document.getElementById('concurrency').textContent = svc._meta?.concurrency ?? '—';
+    const rec = svc.ocr_backends?.recommended_concurrency;
+    const conc = svc._meta?.concurrency;
+    document.getElementById('concurrencyHint').textContent =
+      (rec && conc && rec !== conc) ? ` (권장 ${rec})` : '';
     document.getElementById('totalJobs').textContent = stats.counts?.total ?? '—';
     document.getElementById('processingJobs').textContent = stats.counts?.processing ?? '—';
+
+    // OCR backends
+    const ob = svc.ocr_backends || {};
+    const perBackend = ob.per_backend || {};
+    renderBackends(perBackend);
+    document.getElementById('ocrAlive').textContent = ob.alive ?? '—';
+    document.getElementById('ocrTotal').textContent = ob.total ?? '—';
+    document.getElementById('ocrRecommended').textContent = ob.recommended_concurrency ?? '—';
+    document.getElementById('ocrPerBackend').textContent = ob.per_backend_concurrency ?? '—';
+
+    let ocrStatus = 'ok';
+    if (!ob.alive)                  ocrStatus = 'down';
+    else if (ob.alive < ob.total)   ocrStatus = 'partial';
+    setBadge(document.getElementById('ocrStatus'), ocrStatus);
+
+    // LLM card — mode-dependent
+    const llmActive = mode.includes('llm');
+    const llmCard = document.getElementById('llmCard');
+    const llm = svc.llm || {};
+    const llmHint = document.getElementById('llmHint');
+    if (llmActive) {
+      llmCard.classList.remove('muted');
+      llmHint.textContent = 'mode-llm.sh / mode-llm+ocr.sh 로 활성된 상태입니다.';
+      setBadge(document.getElementById('llmStatus'), llm.status, llm.http_status);
+      document.getElementById('llmHttp').textContent = llm.http_status ?? '—';
+      document.getElementById('llmUrl').textContent = svc._meta?.llm_url ?? '—';
+      document.getElementById('llmUrl').title = svc._meta?.llm_url ?? '';
+    } else {
+      llmCard.classList.add('muted');
+      llmHint.textContent = '현재 LLM 컨테이너가 떠 있지 않습니다. mode-llm.sh 또는 mode-llm+ocr.sh 로 전환하면 활성화됩니다.';
+      setBadge(document.getElementById('llmStatus'), 'idle', null, { idleText: '비활성' });
+      document.getElementById('llmHttp').textContent = '—';
+      document.getElementById('llmUrl').textContent = '— (라우팅 없음)';
+      document.getElementById('llmUrl').title = '';
+    }
+
+    // Quick test buttons re-render only if mode changed
+    if (renderQuickTests._lastMode !== mode) {
+      renderQuickTests(mode);
+      renderQuickTests._lastMode = mode;
+    }
 
     document.getElementById('lastChecked').textContent =
       '마지막 확인: ' + new Date().toLocaleTimeString('ko-KR');
@@ -195,10 +314,10 @@ async function testEndpoint(path, targetId) {
   try {
     const r = await fetch(path);
     el.textContent = `HTTP ${r.status}`;
-    el.className = r.ok ? 'ms-2 text-success small' : 'ms-2 text-danger small';
+    el.className = r.ok ? 'text-success small' : 'text-danger small';
   } catch(e) {
     el.textContent = '연결 실패';
-    el.className = 'ms-2 text-danger small';
+    el.className = 'text-danger small';
   }
 }
 

@@ -11,7 +11,7 @@ services:
     restart: unless-stopped
 
   wrapper:
-    image: honestjung/ocrwrapper:0.1.1
+    image: honestjung/ocrwrapper:0.1.2
     environment:
       VLLM_URL: http://nginx:80
       OCR_CONCURRENCY: "${OCR_CONCURRENCY:-6}"
