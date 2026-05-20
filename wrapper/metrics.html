@@ -94,7 +94,7 @@
     </div>
     <div class="col-lg-6">
       <div class="card chart-card">
-        <div class="card-header">OCR 처리량 <span class="unit">— 완료 페이지(=문서) / 분</span></div>
+        <div class="card-header">OCR 처리량 <span class="unit">— 페이지/분(좌) · 문서/분(우)</span></div>
         <div class="card-body"><div class="chart-wrap"><canvas id="chJobs"></canvas></div></div>
       </div>
     </div>
@@ -110,7 +110,8 @@ const PALETTE = {
   memTotal: '#dee2e6',
   gpu0:     '#dc3545',
   gpu1:     '#fd7e14',
-  jobs:     '#20c997',
+  pages:    '#20c997',
+  jobs:     '#1a2f5a',
 };
 
 const COMMON_OPTS = {
@@ -188,8 +189,15 @@ function init() {
     lineDataset('GPU 1', PALETTE.gpu1, []),
   ]);
   charts.jobs = makeChart('chJobs', [
-    lineDataset('완료/분', PALETTE.jobs, [], { fill: true, tension: 0 }),
-  ]);
+    lineDataset('페이지/분', PALETTE.pages, [], { fill: true, tension: 0, yAxisID: 'y' }),
+    lineDataset('문서/분',   PALETTE.jobs,  [], { tension: 0, yAxisID: 'y1' }),
+  ], { scales: {
+        y:  { beginAtZero: true, position: 'left',
+              title: { display: true, text: '페이지/분', color: PALETTE.pages } },
+        y1: { beginAtZero: true, position: 'right',
+              title: { display: true, text: '문서/분',   color: PALETTE.jobs },
+              grid:  { drawOnChartArea: false } },
+      } });
 }
 
 function asPoints(ts, values) {
@@ -248,10 +256,11 @@ async function refresh() {
   charts.gpuMem.data.datasets[1].data = asPoints(ts, s.gpu1_mem_used_mb);
   charts.gpuMem.update('none');
 
-  // jobs_per_step → jobs/min normalized
-  const jobsPerMin = s.jobs_per_step.map(v =>
+  // jobs_per_step / pages_per_step → per-minute normalized
+  const perMin = arr => arr.map(v =>
     (v === null || v === undefined) ? null : v * 60 / step);
-  charts.jobs.data.datasets[0].data = asPoints(ts, jobsPerMin);
+  charts.jobs.data.datasets[0].data = asPoints(ts, perMin(s.pages_per_step));
+  charts.jobs.data.datasets[1].data = asPoints(ts, perMin(s.jobs_per_step));
   charts.jobs.update('none');
 }
 

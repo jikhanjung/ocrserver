@@ -66,8 +66,13 @@ async def db_init() -> None:
         await _db.execute("ALTER TABLE jobs ADD COLUMN file_hash TEXT")
     if "client_id" not in cols:
         await _db.execute("ALTER TABLE jobs ADD COLUMN client_id TEXT")
+    async with _db.execute("PRAGMA table_info(pages)") as c:
+        page_cols = {row[1] for row in await c.fetchall()}
+    if "completed_at" not in page_cols:
+        await _db.execute("ALTER TABLE pages ADD COLUMN completed_at REAL")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_file_hash ON jobs(file_hash)")
     await _db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_client_id ON jobs(client_id)")
+    await _db.execute("CREATE INDEX IF NOT EXISTS idx_pages_completed_at ON pages(completed_at)")
     await _db.commit()
 
 
@@ -115,8 +120,10 @@ async def db_update_job(job_id: str, **kw) -> None:
 async def db_upsert_page(job_id: str, page_num: int, status: str,
                          duration_ms: int, markdown: str = None, error: str = None) -> None:
     await _db.execute(
-        "INSERT OR REPLACE INTO pages VALUES (?,?,?,?,?,?)",
-        (job_id, page_num, status, duration_ms, markdown, error),
+        "INSERT OR REPLACE INTO pages "
+        "(job_id, page_num, status, duration_ms, markdown, error, completed_at) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (job_id, page_num, status, duration_ms, markdown, error, time.time()),
     )
     await _db.commit()
 
@@ -251,6 +258,7 @@ async def api_metrics(
     for col in _METRIC_COLS:
         series[col] = [None] * len(ts_grid)
     series["jobs_per_step"] = [0] * len(ts_grid)
+    series["pages_per_step"] = [0] * len(ts_grid)
     series["step"] = step
 
     if mdb:
@@ -286,6 +294,20 @@ async def api_metrics(
     for i, t in enumerate(ts_grid):
         if t in jobs_by_bucket:
             series["jobs_per_step"][i] = jobs_by_bucket[t]
+
+    # pages/step: count successful page completions per bucket
+    sql = (
+        "SELECT (CAST(completed_at AS INTEGER)/?)*? AS bucket, COUNT(*) AS n "
+        "FROM pages WHERE completed_at >= ? AND completed_at <= ? "
+        "AND status='ok' "
+        "GROUP BY bucket"
+    )
+    async with _db.execute(sql, (step, step, frm, now)) as c:
+        prows = await c.fetchall()
+    pages_by_bucket = {int(r["bucket"]): int(r["n"]) for r in prows}
+    for i, t in enumerate(ts_grid):
+        if t in pages_by_bucket:
+            series["pages_per_step"][i] = pages_by_bucket[t]
 
     return {
         "from": frm, "to": now, "step": step,
