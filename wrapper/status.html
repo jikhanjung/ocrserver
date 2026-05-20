@@ -8,6 +8,9 @@
   <style>
     body { background: #f8f9fa; }
     .navbar { background: #1a2f5a; }
+    .navbar a.nav-link-page { transition: color .15s; }
+    .navbar a.nav-link-page:hover { color: #fff !important; }
+    .navbar .nav-link-active { color:#fff !important; font-weight: 600; }
     .card { border: none; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
     .status-dot {
       display: inline-block;
@@ -53,10 +56,10 @@
 <nav class="navbar navbar-dark px-4 py-3 mb-4">
   <a class="navbar-brand fw-bold text-white" href="/">OCR Server</a>
   <div class="d-flex gap-3 align-items-center">
-    <a class="text-white-50 text-decoration-none small" href="/">대시보드</a>
-    <span class="text-white small fw-semibold">서비스 상태</span>
-    <a class="text-white-50 text-decoration-none small" href="/metrics">메트릭</a>
-    <span class="refresh-badge pulsing" id="refreshBadge">자동 새로고침</span>
+    <a class="nav-link-page text-white-50 text-decoration-none small" href="/">대시보드</a>
+    <span class="nav-link-page nav-link-active small">서비스 상태</span>
+    <a class="nav-link-page text-white-50 text-decoration-none small" href="/metrics">통계</a>
+    <span class="refresh-badge pulsing">자동 새로고침 · 10s</span>
   </div>
 </nav>
 

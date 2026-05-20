@@ -3,11 +3,21 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ocrserver</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<title>ocrserver — 대시보드</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <style>
-  body { background:#f4f6f9; color:#212529; }
-  .navbar { background:#2c3e50; }
+  body { background:#f8f9fa; color:#212529; }
+  .navbar { background:#1a2f5a; }
+  .navbar a.nav-link-page { transition: color .15s; }
+  .navbar a.nav-link-page:hover { color: #fff !important; }
+  .navbar .nav-link-active { color:#fff !important; font-weight: 600; }
+  .refresh-badge { font-size: .72rem; color: #adb5bd; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .pulsing { animation: pulse 1.4s ease-in-out infinite; }
+
+  .context-strip { font-size:.85rem; color:#6c757d; }
+  .context-strip strong { color:#212529; font-weight:600; }
+
   .stat-card { border:none; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
   .stat-val  { font-size:2rem; font-weight:700; line-height:1.1; }
   .table-card { border:none; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
@@ -20,31 +30,36 @@
   #detail    { border:none; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,.08);
                background:#fff; }
   code       { color:#0d6efd; font-size:.85em; }
-  .dot       { display:inline-block; width:8px; height:8px; border-radius:50%;
-               background:#adb5bd; transition:background .2s; }
-  .dot.on    { background:#198754; }
   .badge-queued          { background:#6c757d !important; }
   .badge-processing      { background:#0d6efd !important; }
   .badge-done            { background:#198754 !important; }
   .badge-done_with_errors{ background:#fd7e14 !important; }
   .badge-failed          { background:#dc3545 !important; }
+  .pagination .page-link { color:#1a2f5a; }
+  .pagination .page-item.active .page-link { background:#1a2f5a; border-color:#1a2f5a; }
 </style>
 </head>
 <body>
 
-<nav class="navbar px-3 py-2 mb-4">
-  <span class="text-white fw-semibold">ocrserver</span>
-  <div class="text-white-50 small d-flex gap-3 align-items-center">
-    <a class="text-white-50 text-decoration-none" href="/status">서비스 상태</a>
-    <a class="text-white-50 text-decoration-none" href="/metrics">메트릭</a>
-    <span>uptime <span id="uptime" class="text-white">—</span></span>
-    <span>concurrency <span id="concurrency" class="text-white">—</span></span>
-    <span title="alive/total OCR backends · 권장 동시성">OCR backends <span id="backends" class="text-white">—</span></span>
-    <span><span class="dot" id="dot"></span> 5s</span>
+<nav class="navbar navbar-dark px-4 py-3 mb-4">
+  <a class="navbar-brand fw-bold text-white" href="/">OCR Server</a>
+  <div class="d-flex gap-3 align-items-center">
+    <span class="nav-link-page nav-link-active small">대시보드</span>
+    <a class="nav-link-page text-white-50 text-decoration-none small" href="/status">서비스 상태</a>
+    <a class="nav-link-page text-white-50 text-decoration-none small" href="/metrics">통계</a>
+    <span class="refresh-badge pulsing">자동 새로고침 · 5s</span>
   </div>
 </nav>
 
 <div class="container-fluid px-4" style="max-width:1200px">
+
+  <!-- context strip -->
+  <div class="context-strip d-flex flex-wrap gap-4 mb-3">
+    <span>모드 <strong id="ctxMode">—</strong></span>
+    <span>가동시간 <strong id="ctxUptime">—</strong></span>
+    <span>동시성 <strong id="ctxConc">—</strong></span>
+    <span>OCR 백엔드 <strong id="ctxBackends">—</strong></span>
+  </div>
 
   <!-- stat cards -->
   <div class="row g-3 mb-4">
@@ -71,7 +86,7 @@
   </div>
 
   <!-- job table -->
-  <div class="card table-card bg-white mb-4">
+  <div class="card table-card bg-white mb-3">
     <div class="card-body p-0">
       <table class="table table-hover mb-0">
         <thead>
@@ -87,6 +102,22 @@
         <tbody id="tbody"></tbody>
       </table>
     </div>
+  </div>
+
+  <!-- pagination -->
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
+    <div class="text-muted small">
+      <span id="rangeFrom">—</span>–<span id="rangeTo">—</span> /
+      총 <span id="rangeTotal">—</span>건
+      <span class="ms-3">페이지당
+        <select id="perPage" class="form-select form-select-sm d-inline-block w-auto">
+          <option>25</option><option>50</option><option>100</option>
+        </select>
+      </span>
+    </div>
+    <nav>
+      <ul class="pagination pagination-sm mb-0" id="pageNav"></ul>
+    </nav>
   </div>
 
   <!-- detail panel -->
@@ -105,6 +136,9 @@
 
 <script>
 let sel = null;
+let page = 1;
+let perPage = 25;
+let pagesCached = 1;
 
 const fmt = {
   time(ts) {
@@ -132,54 +166,113 @@ function badge(st) {
 
 function trunc(s, n) { return s.length > n ? s.slice(0,n)+'…' : s; }
 
-async function refresh() {
-  const dot = document.getElementById('dot');
-  dot.classList.add('on');
-  setTimeout(() => dot.classList.remove('on'), 300);
+function modeLabel(mode) {
+  const map = { 'down':'전체 오프라인', 'llm':'LLM 전용', 'ocr':'OCR 1 GPU',
+                '2ocr':'OCR 2 GPU', 'llm+ocr':'LLM + OCR 1 GPU',
+                'llm+2ocr':'LLM + OCR 2 GPU' };
+  return map[mode] || mode || '—';
+}
 
+async function refresh() {
   try {
     const [sr, jr, svr] = await Promise.all([
-      fetch('/api/stats'), fetch('/ocr'), fetch('/api/services').catch(() => null),
+      fetch('/api/stats').then(r=>r.json()),
+      fetch(`/api/jobs?page=${page}&per_page=${perPage}`).then(r=>r.json()),
+      fetch('/api/services').then(r=>r.json()).catch(()=>null),
     ]);
-    const st = await sr.json(), jobs = await jr.json();
-    const c = st.counts;
+    const c = sr.counts;
 
     document.getElementById('s-total').textContent    = c.total;
     document.getElementById('s-active').textContent   = c.processing + c.queued;
     document.getElementById('s-done').textContent     = c.done;
     document.getElementById('s-err').textContent      = c.done_with_errors;
     document.getElementById('s-failed').textContent   = c.failed;
-    document.getElementById('uptime').textContent     = fmt.uptime(st.uptime_s);
-    document.getElementById('concurrency').textContent = st.concurrency;
 
-    if (svr && svr.ok) {
-      const sv = await svr.json();
-      const ob = sv.ocr_backends;
+    document.getElementById('ctxUptime').textContent  = fmt.uptime(sr.uptime_s);
+    document.getElementById('ctxConc').textContent    = sr.concurrency;
+
+    if (svr) {
+      document.getElementById('ctxMode').textContent = modeLabel(svr._meta?.mode);
+      const ob = svr.ocr_backends;
       if (ob) {
-        document.getElementById('backends').textContent =
-          `${ob.alive}/${ob.total} · rec.${ob.recommended_concurrency}`;
+        document.getElementById('ctxBackends').textContent =
+          `${ob.alive}/${ob.total} · 권장 동시성 ${ob.recommended_concurrency}`;
       }
     }
 
-    document.getElementById('tbody').innerHTML = jobs.map(j => {
-      const pct = j.total_pages ? Math.round(j.done_pages / j.total_pages * 100) : 0;
-      const prog = j.total_pages
-        ? `<div class="progress mb-1"><div class="progress-bar bg-success" style="width:${pct}%"></div></div>
-           <div class="text-muted" style="font-size:.75em">${j.done_pages} / ${j.total_pages}</div>`
-        : '<span class="text-muted small">—</span>';
-      return `<tr data-id="${j.job_id}" ${j.job_id===sel?'class="selected"':''} onclick="selectJob('${j.job_id}')">
-        <td class="ps-4" title="${j.filename||''}">${trunc(j.filename||'—', 40)}</td>
-        <td><code>${j.job_id.slice(0,8)}</code></td>
-        <td>${badge(j.status)}</td>
-        <td>${prog}</td>
-        <td class="small text-secondary">${fmt.time(j.submitted_at)}</td>
-        <td class="small text-secondary">${fmt.dur(j.submitted_at, j.completed_at)}</td>
-      </tr>`;
-    }).join('');
+    renderJobs(jr);
+    renderPagination(jr);
 
     if (sel) refreshDetail();
   } catch(e) { console.error(e); }
 }
+
+function renderJobs(jr) {
+  const items = jr.items || [];
+  document.getElementById('tbody').innerHTML = items.map(j => {
+    const pct = j.total_pages ? Math.round(j.done_pages / j.total_pages * 100) : 0;
+    const prog = j.total_pages
+      ? `<div class="progress mb-1"><div class="progress-bar bg-success" style="width:${pct}%"></div></div>
+         <div class="text-muted" style="font-size:.75em">${j.done_pages} / ${j.total_pages}</div>`
+      : '<span class="text-muted small">—</span>';
+    return `<tr data-id="${j.job_id}" ${j.job_id===sel?'class="selected"':''} onclick="selectJob('${j.job_id}')">
+      <td class="ps-4" title="${j.filename||''}">${trunc(j.filename||'—', 40)}</td>
+      <td><code>${j.job_id.slice(0,8)}</code></td>
+      <td>${badge(j.status)}</td>
+      <td>${prog}</td>
+      <td class="small text-secondary">${fmt.time(j.submitted_at)}</td>
+      <td class="small text-secondary">${fmt.dur(j.submitted_at, j.completed_at)}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6" class="text-center text-muted py-4">표시할 작업이 없습니다.</td></tr>';
+}
+
+function renderPagination(jr) {
+  pagesCached = jr.pages || 1;
+  const total = jr.total || 0;
+  const from = total === 0 ? 0 : (jr.page - 1) * jr.per_page + 1;
+  const to   = Math.min(jr.page * jr.per_page, total);
+  document.getElementById('rangeFrom').textContent = from;
+  document.getElementById('rangeTo').textContent   = to;
+  document.getElementById('rangeTotal').textContent = total;
+
+  const nav = document.getElementById('pageNav');
+  const pages = pagesCached;
+  const cur = jr.page;
+  const items = [];
+  const li = (label, p, disabled = false, active = false) =>
+    `<li class="page-item${disabled?' disabled':''}${active?' active':''}">
+       <a class="page-link" href="#" data-page="${p}">${label}</a>
+     </li>`;
+
+  items.push(li('«', 1, cur === 1));
+  items.push(li('‹', Math.max(1, cur - 1), cur === 1));
+
+  // Window of up to 7 page numbers around current
+  const span = 3;
+  let lo = Math.max(1, cur - span);
+  let hi = Math.min(pages, cur + span);
+  if (lo > 1) items.push(li('…', lo - 1, true));
+  for (let p = lo; p <= hi; p++) items.push(li(String(p), p, false, p === cur));
+  if (hi < pages) items.push(li('…', hi + 1, true));
+
+  items.push(li('›', Math.min(pages, cur + 1), cur === pages));
+  items.push(li('»', pages, cur === pages));
+  nav.innerHTML = items.join('');
+
+  nav.querySelectorAll('a.page-link').forEach(a => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const p = parseInt(a.dataset.page, 10);
+      if (!isNaN(p) && p !== page) { page = p; refresh(); }
+    });
+  });
+}
+
+document.getElementById('perPage').addEventListener('change', (e) => {
+  perPage = parseInt(e.target.value, 10);
+  page = 1;
+  refresh();
+});
 
 async function selectJob(id) {
   if (sel === id) { closeDetail(); return; }

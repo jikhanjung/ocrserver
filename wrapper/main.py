@@ -162,6 +162,19 @@ async def db_list_jobs(client_id: str | None = None) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def db_page_jobs(client_id: str | None, limit: int, offset: int) -> tuple[list[dict], int]:
+    where = "" if client_id is None else " WHERE client_id=?"
+    base_params: tuple = () if client_id is None else (client_id,)
+    async with _db.execute(f"SELECT COUNT(*) FROM jobs{where}", base_params) as c:
+        total = (await c.fetchone())[0]
+    sql = ("SELECT job_id,filename,client_id,status,submitted_at,completed_at,"
+           f"total_pages,done_pages,failed_pages,error FROM jobs{where} "
+           "ORDER BY submitted_at DESC LIMIT ? OFFSET ?")
+    async with _db.execute(sql, base_params + (limit, offset)) as c:
+        rows = await c.fetchall()
+    return [dict(r) for r in rows], total
+
+
 # ── App lifecycle ─────────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -407,6 +420,31 @@ async def api_services():
             "probe_age_s": round(time.time() - cache["at"], 1),
             "uptime_s": int(time.time() - _start_time),
         },
+    }
+
+
+@app.get("/api/jobs")
+async def api_jobs(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=1, le=200),
+    client_id: str | None = Query(None),
+):
+    offset = (page - 1) * per_page
+    rows, total = await db_page_jobs(client_id, per_page, offset)
+    # Overlay in-memory state for queued/processing jobs so progress feels live.
+    items = []
+    for j in rows:
+        jid = j["job_id"]
+        if jid in _jobs and _jobs[jid]["status"] in ("queued", "processing"):
+            items.append({k: v for k, v in _jobs[jid].items() if k != "pages"})
+        else:
+            items.append(j)
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "pages": (total + per_page - 1) // per_page if total else 0,
     }
 
 
