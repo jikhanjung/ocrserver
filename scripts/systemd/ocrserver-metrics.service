@@ -1,0 +1,12 @@
+[Unit]
+Description=ocrserver host metrics snapshot
+Wants=ocrserver-metrics.timer
+
+[Service]
+Type=oneshot
+# /srv/ocrserver/data is the bind-mounted DB dir for the wrapper container.
+# Running as root keeps it simple — nvidia-smi works for any user, but the
+# data dir is root-owned on the live deploy.
+ExecStart=/usr/bin/python3 /srv/ocrserver/scripts/metrics_collector.py --db /srv/ocrserver/data/metrics.db
+Nice=10
+IOSchedulingClass=idle

@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Metrics — OCR Server</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/date-fns@2.30.0/index.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <style>
+    body { background:#f8f9fa; }
+    .navbar { background:#1a2f5a; }
+    .card { border:none; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+    .chart-card .card-header {
+      background:#fff; border-bottom:1px solid #eef0f3;
+      font-weight:600; font-size:.95rem;
+    }
+    .chart-card .card-header .unit { font-weight:400; color:#6c757d; font-size:.8rem; }
+    .chart-wrap { position:relative; height:220px; }
+    .range-btn.active { background:#1a2f5a; color:#fff; border-color:#1a2f5a; }
+    .refresh-badge { font-size:.72rem; color:#adb5bd; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    .pulsing { animation: pulse 1.4s ease-in-out infinite; }
+    .empty-note { color:#6c757d; padding:1.5rem; text-align:center; }
+  </style>
+</head>
+<body>
+
+<nav class="navbar navbar-dark px-4 py-3 mb-4">
+  <a class="navbar-brand fw-bold text-white" href="/">OCR Server</a>
+  <div class="d-flex gap-3 align-items-center">
+    <a class="text-white-50 text-decoration-none small" href="/">대시보드</a>
+    <a class="text-white-50 text-decoration-none small" href="/status">서비스 상태</a>
+    <span class="text-white small fw-semibold">메트릭</span>
+    <span class="refresh-badge pulsing" id="refreshBadge">자동 새로고침</span>
+  </div>
+</nav>
+
+<div class="container-fluid px-4" style="max-width:1300px">
+
+  <!-- range selector -->
+  <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div class="btn-group" role="group" id="rangeGroup">
+      <button class="btn btn-sm btn-outline-secondary range-btn" data-range="1h">1시간</button>
+      <button class="btn btn-sm btn-outline-secondary range-btn active" data-range="6h">6시간</button>
+      <button class="btn btn-sm btn-outline-secondary range-btn" data-range="24h">24시간</button>
+      <button class="btn btn-sm btn-outline-secondary range-btn" data-range="7d">7일</button>
+      <button class="btn btn-sm btn-outline-secondary range-btn" data-range="30d">30일</button>
+      <button class="btn btn-sm btn-outline-secondary range-btn" data-range="all">전체</button>
+    </div>
+    <div class="text-muted small">
+      해상도 <span id="stepLabel">—</span> · 마지막 갱신 <span id="lastChecked">—</span>
+    </div>
+  </div>
+
+  <div id="emptyBanner" class="alert alert-warning d-none">
+    <strong>아직 수집된 데이터가 없습니다.</strong>
+    호스트에서 <code>ocrserver-metrics.timer</code> 가 동작 중인지 확인하세요.
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-lg-6">
+      <div class="card chart-card">
+        <div class="card-header">서버 부하 (load avg) <span class="unit">— 1m / 5m / 15m</span></div>
+        <div class="card-body"><div class="chart-wrap"><canvas id="chLoad"></canvas></div></div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="card chart-card">
+        <div class="card-header">시스템 메모리 사용량 <span class="unit">— MB</span></div>
+        <div class="card-body"><div class="chart-wrap"><canvas id="chMem"></canvas></div></div>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="card chart-card">
+        <div class="card-header">GPU 사용률 <span class="unit">— GPU 0 / GPU 1, %</span></div>
+        <div class="card-body"><div class="chart-wrap"><canvas id="chGpuUtil"></canvas></div></div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="card chart-card">
+        <div class="card-header">GPU 온도 <span class="unit">— GPU 0 / GPU 1, °C</span></div>
+        <div class="card-body"><div class="chart-wrap"><canvas id="chGpuTemp"></canvas></div></div>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="card chart-card">
+        <div class="card-header">GPU 메모리 <span class="unit">— GPU 0 / GPU 1, MB</span></div>
+        <div class="card-body"><div class="chart-wrap"><canvas id="chGpuMem"></canvas></div></div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="card chart-card">
+        <div class="card-header">OCR 처리량 <span class="unit">— 완료 페이지(=문서) / 분</span></div>
+        <div class="card-body"><div class="chart-wrap"><canvas id="chJobs"></canvas></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const PALETTE = {
+  load1:    '#0d6efd',
+  load5:    '#6f42c1',
+  load15:   '#adb5bd',
+  mem:      '#198754',
+  memTotal: '#dee2e6',
+  gpu0:     '#dc3545',
+  gpu1:     '#fd7e14',
+  jobs:     '#20c997',
+};
+
+const COMMON_OPTS = {
+  responsive: true,
+  maintainAspectRatio: false,
+  animation: false,
+  interaction: { mode: 'index', intersect: false },
+  scales: {
+    x: {
+      type: 'time',
+      time: { tooltipFormat: 'yyyy-MM-dd HH:mm' },
+      ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 8, color: '#6c757d' },
+      grid: { color: '#f1f3f5' },
+    },
+    y: {
+      beginAtZero: true,
+      ticks: { color: '#6c757d' },
+      grid: { color: '#f1f3f5' },
+    },
+  },
+  plugins: {
+    legend: { display: true, position: 'top', align: 'end',
+              labels: { boxWidth: 10, boxHeight: 10, font: { size: 11 } } },
+    tooltip: { enabled: true },
+  },
+};
+
+function lineDataset(label, color, data, opts = {}) {
+  return {
+    label, data,
+    borderColor: color,
+    backgroundColor: color + '22',
+    borderWidth: 1.5,
+    pointRadius: 0,
+    tension: 0.15,
+    spanGaps: true,
+    ...opts,
+  };
+}
+
+function makeChart(canvasId, datasets, extraOpts = {}) {
+  const ctx = document.getElementById(canvasId).getContext('2d');
+  return new Chart(ctx, {
+    type: 'line',
+    data: { datasets },
+    options: { ...COMMON_OPTS, ...extraOpts,
+               scales: { ...COMMON_OPTS.scales, ...(extraOpts.scales || {}) } },
+  });
+}
+
+const charts = {};
+
+function init() {
+  charts.load = makeChart('chLoad', [
+    lineDataset('1m',  PALETTE.load1,  []),
+    lineDataset('5m',  PALETTE.load5,  []),
+    lineDataset('15m', PALETTE.load15, []),
+  ]);
+  charts.mem = makeChart('chMem', [
+    lineDataset('used',  PALETTE.mem,      [], { fill: true }),
+    lineDataset('total', PALETTE.memTotal, [], { borderDash: [4,4] }),
+  ]);
+  charts.gpuUtil = makeChart('chGpuUtil', [
+    lineDataset('GPU 0', PALETTE.gpu0, []),
+    lineDataset('GPU 1', PALETTE.gpu1, []),
+  ], { scales: { y: { beginAtZero: true, suggestedMax: 100,
+                      ticks: { callback: v => v + '%' } } } });
+  charts.gpuTemp = makeChart('chGpuTemp', [
+    lineDataset('GPU 0', PALETTE.gpu0, []),
+    lineDataset('GPU 1', PALETTE.gpu1, []),
+  ], { scales: { y: { beginAtZero: false, suggestedMin: 30, suggestedMax: 90,
+                      ticks: { callback: v => v + '°C' } } } });
+  charts.gpuMem = makeChart('chGpuMem', [
+    lineDataset('GPU 0', PALETTE.gpu0, []),
+    lineDataset('GPU 1', PALETTE.gpu1, []),
+  ]);
+  charts.jobs = makeChart('chJobs', [
+    lineDataset('완료/분', PALETTE.jobs, [], { fill: true, tension: 0 }),
+  ]);
+}
+
+function asPoints(ts, values) {
+  const out = [];
+  for (let i = 0; i < ts.length; i++) {
+    if (values[i] === null || values[i] === undefined) continue;
+    out.push({ x: ts[i] * 1000, y: values[i] });
+  }
+  return out;
+}
+
+function stepLabel(step) {
+  if (step < 60)   return step + 's';
+  if (step < 3600) return Math.round(step/60) + 'm';
+  if (step < 86400) return Math.round(step/3600) + 'h';
+  return Math.round(step/86400) + 'd';
+}
+
+async function refresh() {
+  const range = document.querySelector('.range-btn.active').dataset.range;
+  let data;
+  try {
+    data = await fetch('/api/metrics?range=' + encodeURIComponent(range)).then(r => r.json());
+  } catch (e) {
+    console.error(e);
+    return;
+  }
+  const s = data.series;
+  const ts = s.ts;
+  const step = data.step;
+
+  document.getElementById('emptyBanner').classList.toggle(
+    'd-none', !!(data.available && ts.length && s.load1.some(v => v !== null)));
+  document.getElementById('stepLabel').textContent = stepLabel(step);
+  document.getElementById('lastChecked').textContent =
+    new Date().toLocaleTimeString('ko-KR');
+
+  charts.load.data.datasets[0].data = asPoints(ts, s.load1);
+  charts.load.data.datasets[1].data = asPoints(ts, s.load5);
+  charts.load.data.datasets[2].data = asPoints(ts, s.load15);
+  charts.load.update('none');
+
+  charts.mem.data.datasets[0].data = asPoints(ts, s.mem_used_mb);
+  charts.mem.data.datasets[1].data = asPoints(ts, s.mem_total_mb);
+  charts.mem.update('none');
+
+  charts.gpuUtil.data.datasets[0].data = asPoints(ts, s.gpu0_util);
+  charts.gpuUtil.data.datasets[1].data = asPoints(ts, s.gpu1_util);
+  charts.gpuUtil.update('none');
+
+  charts.gpuTemp.data.datasets[0].data = asPoints(ts, s.gpu0_temp);
+  charts.gpuTemp.data.datasets[1].data = asPoints(ts, s.gpu1_temp);
+  charts.gpuTemp.update('none');
+
+  charts.gpuMem.data.datasets[0].data = asPoints(ts, s.gpu0_mem_used_mb);
+  charts.gpuMem.data.datasets[1].data = asPoints(ts, s.gpu1_mem_used_mb);
+  charts.gpuMem.update('none');
+
+  // jobs_per_step → jobs/min normalized
+  const jobsPerMin = s.jobs_per_step.map(v =>
+    (v === null || v === undefined) ? null : v * 60 / step);
+  charts.jobs.data.datasets[0].data = asPoints(ts, jobsPerMin);
+  charts.jobs.update('none');
+}
+
+document.querySelectorAll('.range-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    refresh();
+  });
+});
+
+init();
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>

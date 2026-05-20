@@ -13,6 +13,7 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException,
 from fastapi.responses import HTMLResponse
 
 DB_PATH = os.getenv("DB_PATH", "/data/ocrserver.db")
+METRICS_DB_PATH = os.getenv("METRICS_DB_PATH", "/data/metrics.db")
 PDF_DIR = os.getenv("PDF_DIR", "/data/pdfs")
 VLLM_URL = os.getenv("VLLM_URL", "http://nginx:80")
 VLLM_MODEL = os.getenv("VLLM_MODEL", "chandra")
@@ -27,6 +28,8 @@ _RETRY_DELAYS = [5, 15, 30, 60]
 _jobs: dict[str, dict] = {}
 _sem: asyncio.Semaphore
 _db: aiosqlite.Connection
+_metrics_db: aiosqlite.Connection | None = None
+_metrics_db_lock = asyncio.Lock()
 _start_time = time.time()
 
 
@@ -166,14 +169,130 @@ async def lifespan(app: FastAPI):
     await _resume_processing_jobs()
     yield
     await _db.close()
+    if _metrics_db is not None:
+        await _metrics_db.close()
 
 
 app = FastAPI(lifespan=lifespan)
 
 _DASHBOARD = open(os.path.join(os.path.dirname(__file__), "dashboard.html")).read()
 _STATUS_PAGE = open(os.path.join(os.path.dirname(__file__), "status.html")).read()
+_METRICS_PAGE = open(os.path.join(os.path.dirname(__file__), "metrics.html")).read()
 
 LLM_URL = os.getenv("LLM_URL", "")  # optional override; falls back to VLLM_URL/llm/
+
+
+# ── Host metrics (collected externally by scripts/metrics_collector.py) ───────
+
+_RANGE_MAP = {
+    "5m": 300, "15m": 900, "30m": 1800,
+    "1h": 3600, "3h": 10800, "6h": 21600, "12h": 43200,
+    "24h": 86400, "1d": 86400,
+    "3d": 259200, "7d": 604800, "30d": 2592000,
+}
+_STEP_LADDER = [60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 21600, 43200, 86400]
+_METRIC_COLS = [
+    "load1", "load5", "load15", "mem_used_mb", "mem_total_mb",
+    "gpu0_util", "gpu0_temp", "gpu0_mem_used_mb", "gpu0_mem_total_mb",
+    "gpu1_util", "gpu1_temp", "gpu1_mem_used_mb", "gpu1_mem_total_mb",
+]
+
+
+def _auto_step(span_secs: int, target_points: int = 360) -> int:
+    raw = max(60, span_secs // max(target_points, 1))
+    for s in _STEP_LADDER:
+        if raw <= s:
+            return s
+    return _STEP_LADDER[-1]
+
+
+async def _get_metrics_db() -> aiosqlite.Connection | None:
+    """Lazy-open a read-only handle to metrics.db. Returns None if the file
+    doesn't exist yet (collector hasn't fired)."""
+    global _metrics_db
+    if _metrics_db is not None:
+        return _metrics_db
+    if not os.path.exists(METRICS_DB_PATH):
+        return None
+    async with _metrics_db_lock:
+        if _metrics_db is None and os.path.exists(METRICS_DB_PATH):
+            _metrics_db = await aiosqlite.connect(METRICS_DB_PATH)
+            _metrics_db.row_factory = aiosqlite.Row
+    return _metrics_db
+
+
+@app.get("/api/metrics")
+async def api_metrics(
+    range_: str = Query("1h", alias="range"),
+    step: int | None = None,
+):
+    now = int(time.time())
+    range_secs = _RANGE_MAP.get(range_)
+    if range_ == "all":
+        range_secs = None
+    mdb = await _get_metrics_db()
+
+    if range_secs is None:
+        frm = now - 3600
+        if mdb:
+            async with mdb.execute("SELECT MIN(ts) AS m FROM metrics") as c:
+                row = await c.fetchone()
+            if row and row["m"]:
+                frm = int(row["m"])
+    else:
+        frm = now - range_secs
+
+    if step is None or step < 60:
+        step = _auto_step(now - frm)
+
+    ts_grid = list(range(frm - frm % step, now + 1, step))
+
+    series: dict[str, list] = {"ts": ts_grid}
+    for col in _METRIC_COLS:
+        series[col] = [None] * len(ts_grid)
+    series["jobs_per_step"] = [0] * len(ts_grid)
+    series["step"] = step
+
+    if mdb:
+        avg_cols = ", ".join(f"AVG({c}) AS {c}" for c in _METRIC_COLS)
+        sql = (
+            f"SELECT (ts/?)*? AS bucket, {avg_cols} "
+            "FROM metrics WHERE ts >= ? AND ts <= ? "
+            "GROUP BY bucket ORDER BY bucket"
+        )
+        async with mdb.execute(sql, (step, step, frm, now)) as c:
+            rows = await c.fetchall()
+        by_bucket = {int(r["bucket"]): r for r in rows}
+        for i, t in enumerate(ts_grid):
+            r = by_bucket.get(t)
+            if not r:
+                continue
+            for col in _METRIC_COLS:
+                v = r[col]
+                if v is None:
+                    continue
+                series[col][i] = round(v, 2) if isinstance(v, float) else v
+
+    # jobs/step: count completions per bucket from ocrserver.db
+    sql = (
+        "SELECT (CAST(completed_at AS INTEGER)/?)*? AS bucket, COUNT(*) AS n "
+        "FROM jobs WHERE completed_at >= ? AND completed_at <= ? "
+        "AND status IN ('done','done_with_errors') "
+        "GROUP BY bucket"
+    )
+    async with _db.execute(sql, (step, step, frm, now)) as c:
+        jrows = await c.fetchall()
+    jobs_by_bucket = {int(r["bucket"]): int(r["n"]) for r in jrows}
+    for i, t in enumerate(ts_grid):
+        if t in jobs_by_bucket:
+            series["jobs_per_step"][i] = jobs_by_bucket[t]
+
+    return {
+        "from": frm, "to": now, "step": step,
+        "range": range_,
+        "available": mdb is not None,
+        "series": series,
+    }
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -186,6 +305,11 @@ async def dashboard():
 @app.get("/status", response_class=HTMLResponse)
 async def status_page():
     return _STATUS_PAGE
+
+
+@app.get("/metrics", response_class=HTMLResponse)
+async def metrics_page():
+    return _METRICS_PAGE
 
 
 async def _probe_url(client: httpx.AsyncClient, url: str) -> dict:
