@@ -39,7 +39,19 @@
 
 ## 배포
 
-이미지: `honestjung/ocrwrapper:0.1.6` (digest `308861f8931a...`).
+이미지: `honestjung/ocrwrapper:0.1.6` (digest `308861f8931a...`) — Docker Hub
+에 `:0.1.6` + `:latest` 동시 push, 운영본 swap 완료. swap 직후 확인:
+
+```
+images: {
+  'nginx': 'nginx:alpine',
+  'wrapper': 'honestjung/ocrwrapper:0.1.6',
+  'chandra-a': 'honestjung/ocrserver:0.1.0',
+  'chandra-b': 'honestjung/ocrserver:0.1.0',
+  'llm': 'vllm/vllm-openai:latest'
+}
+```
+
 이번 swap 은 wrapper image 만 바뀌는 게 아니라 **volume 마운트도 추가** 되니
 compose 파일 sync 가 필수:
 
