@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 import aiosqlite
 import fitz
 import httpx
+import yaml
 from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,6 +25,7 @@ MAX_PAGE_PX = int(os.getenv("OCR_MAX_PAGE_PX", "2200"))  # cap longest side; cha
 OCR_BACKENDS = [s.strip() for s in os.getenv("OCR_BACKENDS", "chandra-a,chandra-b").split(",") if s.strip()]
 OCR_BACKEND_PORT = int(os.getenv("OCR_BACKEND_PORT", "8000"))
 OCR_PER_BACKEND_CONCURRENCY = int(os.getenv("OCR_PER_BACKEND_CONCURRENCY", "6"))
+COMPOSE_PATH = os.getenv("COMPOSE_PATH", "/etc/ocrserver-compose.yml")
 _RETRY_DELAYS = [5, 15, 30, 60]
 
 _jobs: dict[str, dict] = {}
@@ -369,6 +371,28 @@ _PROBE_TTL = 5.0
 _probe_cache = {"at": 0.0, "ocr": {}, "ocr_alive": 0, "llm": None, "chandra": None}
 _probe_lock = asyncio.Lock()
 
+# compose images cache — read /srv/ocrserver/docker-compose.yml (mounted RO)
+# to surface configured image tags per service on the status page.
+_COMPOSE_TTL = 60.0
+_compose_cache: dict = {"at": 0.0, "images": {}}
+
+
+def _read_compose_images() -> dict[str, str]:
+    if time.time() - _compose_cache["at"] < _COMPOSE_TTL:
+        return _compose_cache["images"]
+    images: dict[str, str] = {}
+    try:
+        with open(COMPOSE_PATH) as f:
+            data = yaml.safe_load(f) or {}
+        for name, svc in (data.get("services") or {}).items():
+            img = svc.get("image")
+            if img:
+                images[name] = img
+    except Exception:
+        pass
+    _compose_cache.update(at=time.time(), images=images)
+    return images
+
 
 async def _refresh_probe_cache() -> dict:
     if time.time() - _probe_cache["at"] < _PROBE_TTL:
@@ -425,6 +449,7 @@ async def api_services():
             "mode": _mode_from_probes(cache),
             "probe_age_s": round(time.time() - cache["at"], 1),
             "uptime_s": int(time.time() - _start_time),
+            "images": _read_compose_images(),
         },
     }
 

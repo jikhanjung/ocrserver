@@ -67,27 +67,35 @@
 
   <!-- Mode summary -->
   <div class="card mb-4">
-    <div class="card-body p-4 d-flex flex-wrap align-items-center gap-3">
-      <div>
-        <div class="metric-label">현재 모드</div>
-        <div class="mt-1"><span id="modeChip" class="mode-chip muted">확인 중...</span></div>
-      </div>
-      <div class="ms-md-4">
-        <div class="metric-label">가동 시간</div>
-        <div class="metric-value fs-5" id="uptime">—</div>
-      </div>
-      <div>
-        <div class="metric-label">동시성</div>
-        <div class="metric-value fs-5">
-          <span id="concurrency">—</span>
-          <span class="text-muted fs-6 fw-normal" id="concurrencyHint"></span>
+    <div class="card-body p-4">
+      <div class="d-flex flex-wrap align-items-center gap-3">
+        <div>
+          <div class="metric-label">현재 모드</div>
+          <div class="mt-1"><span id="modeChip" class="mode-chip muted">확인 중...</span></div>
+        </div>
+        <div class="ms-md-4">
+          <div class="metric-label">가동 시간</div>
+          <div class="metric-value fs-5" id="uptime">—</div>
+        </div>
+        <div>
+          <div class="metric-label">동시성</div>
+          <div class="metric-value fs-5">
+            <span id="concurrency">—</span>
+            <span class="text-muted fs-6 fw-normal" id="concurrencyHint"></span>
+          </div>
+        </div>
+        <div>
+          <div class="metric-label">처리 중 / 총 Job</div>
+          <div class="metric-value fs-5">
+            <span id="processingJobs">—</span>
+            <span class="text-muted fs-6 fw-normal"> / <span id="totalJobs">—</span></span>
+          </div>
         </div>
       </div>
-      <div>
-        <div class="metric-label">처리 중 / 총 Job</div>
-        <div class="metric-value fs-5">
-          <span id="processingJobs">—</span>
-          <span class="text-muted fs-6 fw-normal"> / <span id="totalJobs">—</span></span>
+      <div class="mt-3 pt-3 border-top">
+        <div class="metric-label mb-2">컨테이너 이미지 <span class="text-muted small fw-normal">(compose 설정 기준)</span></div>
+        <div id="imagesList" class="d-flex flex-wrap gap-2">
+          <span class="text-muted small">—</span>
         </div>
       </div>
     </div>
@@ -178,6 +186,26 @@ function setBadge(el, status, code, opts = {}) {
 // chandra-a → GPU 0, chandra-b → GPU 1 (compose device_ids 약속)
 const GPU_FOR_BACKEND = { 'chandra-a': 'GPU 0', 'chandra-b': 'GPU 1' };
 
+// Render wrapper / chandra-a / chandra-b / llm image tags (nginx omitted —
+// not interesting). compose file is the desired-state source.
+const IMAGE_ORDER = ['wrapper', 'chandra-a', 'chandra-b', 'llm'];
+
+function renderImages(images) {
+  const root = document.getElementById('imagesList');
+  const rows = IMAGE_ORDER
+    .filter(name => images[name])
+    .map(name => {
+      const full = images[name];
+      const tag = full.includes(':') ? full.split(':').pop() : 'latest';
+      return `<span class="badge bg-light text-dark border" title="${full}">
+        <span class="text-muted">${name}</span>
+        <code class="ms-1 text-dark">${tag}</code>
+      </span>`;
+    });
+  root.innerHTML = rows.length ? rows.join('')
+    : '<span class="text-muted small">compose 파일을 읽지 못했습니다.</span>';
+}
+
 function renderBackends(perBackend) {
   const root = document.getElementById('backendList');
   root.innerHTML = '';
@@ -262,6 +290,9 @@ async function refresh() {
       (rec && conc && rec !== conc) ? ` (권장 ${rec})` : '';
     document.getElementById('totalJobs').textContent = stats.counts?.total ?? '—';
     document.getElementById('processingJobs').textContent = stats.counts?.processing ?? '—';
+
+    // Container images (from compose file mounted RO into wrapper)
+    renderImages(svc._meta?.images || {});
 
     // OCR backends
     const ob = svc.ocr_backends || {};

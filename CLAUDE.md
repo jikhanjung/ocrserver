@@ -57,6 +57,23 @@ Current mode is visible in `/status` (mode chip) and at `_meta.mode` in
 - Auto-memory at `~/.claude/.../memory/` — durable preferences, gotchas,
   references; loaded into context automatically
 
+## Known gotcha — chandra image build
+
+이 호스트(KOPRI 망)에서 `docker build` 로 chandra 이미지(`honestjung/ocrserver`)
+를 빌드하면 `snapshot_download(...)` 단계가 어느 % 에서 멈춰서 끝까지 안
+가는 적이 있었다. 외부(다른 망의 머신, RunPod 등)에서 빌드해서 Docker Hub
+로 push → 이 호스트에서 `docker pull` 하는 우회로를 사용한 적 있음.
+
+따라서 chandra 이미지 신규 빌드가 필요할 때:
+- 먼저 이 호스트에서 시도해보고 (cache hit 으로 1분 안에 끝나는 경우도 있음)
+- 진행이 멈추거나 비현실적으로 느리면 외부 빌드 + Hub push 우회로로 전환
+- wrapper 이미지(`honestjung/ocrwrapper`) 는 가벼워서 항상 호스트 빌드 OK
+
+wrapper 와 달리 chandra Dockerfile 은 `RUN python3 -c "snapshot_download(...)"`
+로 모델 가중치(~10GB) 를 build-time 에 받아서 image layer 에 굽는 구조 —
+huggingface 트래픽이 buildkit 컨테이너 내부에서 일정 시점 이후 progress 가
+안 나가는 패턴이 있다.
+
 ## Session start
 
 **Read `HANDOFF.md` at the start of every session** to see the current dev

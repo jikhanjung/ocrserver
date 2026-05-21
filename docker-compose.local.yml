@@ -12,7 +12,7 @@ services:
     restart: unless-stopped
 
   wrapper:
-    image: honestjung/ocrwrapper:0.1.5
+    image: honestjung/ocrwrapper:0.1.6
     build:
       context: ./wrapper
     environment:
@@ -22,12 +22,13 @@ services:
       DB_PATH: /data/ocrserver.db
     volumes:
       - ./data:/data
+      - ./docker-compose.local.yml:/etc/ocrserver-compose.yml:ro
     depends_on:
       - chandra-a
     restart: unless-stopped
 
   chandra-a:
-    image: honestjung/ocrserver:0.1.0
+    image: honestjung/ocrserver:0.1.1
     deploy:
       resources:
         reservations:
