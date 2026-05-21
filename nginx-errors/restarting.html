@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="refresh" content="3">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>서버 재시작 중 — OCR Server</title>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: #f8f9fa; color: #212529;
+      font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, "Apple SD Gothic Neo", sans-serif;
+      display: flex; align-items: center; justify-content: center;
+      flex-direction: column; padding: 1rem;
+    }
+    .card {
+      background: #fff; border-radius: 12px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.08);
+      padding: 2.5rem 3rem;
+      max-width: 480px; text-align: center;
+    }
+    h1 {
+      font-size: 1.25rem; font-weight: 700;
+      color: #1a2f5a; margin: 0 0 .75rem;
+    }
+    p { color: #6c757d; line-height: 1.55; margin: .25rem 0; }
+    .spinner {
+      width: 36px; height: 36px;
+      border: 3px solid #e9ecef; border-top-color: #1a2f5a;
+      border-radius: 50%;
+      animation: spin .9s linear infinite;
+      margin: 0 auto 1.25rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .hint { font-size: .82rem; color: #adb5bd; margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="spinner"></div>
+    <h1>서버 재시작 중</h1>
+    <p>모드 전환 또는 wrapper 재기동이 진행 중입니다.</p>
+    <p>3초마다 자동 새로고침됩니다.</p>
+    <div class="hint">완료까지 보통 1–5분 정도 소요됩니다.</div>
+  </div>
+</body>
+</html>

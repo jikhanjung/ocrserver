@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for ocrserver mode-switch requests
+
+[Path]
+PathExists=/srv/ocrserver/data/mode_request
+Unit=ocrserver-mode-switch.service
+
+[Install]
+WantedBy=multi-user.target

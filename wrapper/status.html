@@ -71,7 +71,13 @@
       <div class="d-flex flex-wrap align-items-center gap-3">
         <div>
           <div class="metric-label">현재 모드</div>
-          <div class="mt-1"><span id="modeChip" class="mode-chip muted">확인 중...</span></div>
+          <div class="mt-1 d-flex align-items-center gap-2">
+            <span id="modeChip" class="mode-chip muted">확인 중...</span>
+            <div class="btn-group btn-group-sm" id="modeBtns" style="display:none">
+              <button class="btn btn-outline-secondary" data-target="ocr" title="OCR 2 GPU 모드로 전환">→ OCR</button>
+              <button class="btn btn-outline-secondary" data-target="llm" title="LLM + OCR 1 GPU 모드로 전환">→ LLM</button>
+            </div>
+          </div>
         </div>
         <div class="ms-md-4">
           <div class="metric-label">가동 시간</div>
@@ -355,8 +361,68 @@ async function testEndpoint(path, targetId) {
   }
 }
 
+// ── Mode switch ────────────────────────────────────────────────────────────
+const MODE_TOKEN_KEY = 'ocrserver.mode_token';
+
+async function refreshModeButtons() {
+  try {
+    const r = await fetch('/api/mode');
+    const m = await r.json();
+    const btns = document.getElementById('modeBtns');
+    btns.style.display = m.enabled ? '' : 'none';
+    btns.querySelectorAll('button').forEach(b => { b.disabled = m.switching; });
+  } catch (e) { /* ignore — nav banner will show if wrapper is down */ }
+}
+
+async function requestModeSwitch(target) {
+  // Confirm given current in-flight load.
+  let processing = null;
+  try {
+    const s = await fetch('/api/stats').then(r => r.json());
+    processing = s.counts?.processing ?? 0;
+  } catch (e) { /* best effort */ }
+  const msg = (processing && processing > 0)
+    ? `현재 처리 중인 작업이 ${processing}건 있습니다. ${target.toUpperCase()} 모드로 전환하시겠습니까? (각 GPU cold start 4–5분)`
+    : `${target.toUpperCase()} 모드로 전환하시겠습니까? (각 GPU cold start 4–5분)`;
+  if (!confirm(msg)) return;
+
+  let token = localStorage.getItem(MODE_TOKEN_KEY) || '';
+  if (!token) {
+    token = prompt('관리자 토큰을 입력하세요 (MODE_TOKEN):') || '';
+    if (!token) return;
+    localStorage.setItem(MODE_TOKEN_KEY, token);
+  }
+  try {
+    const r = await fetch('/api/mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Mode-Token': token },
+      body: JSON.stringify({ mode: target }),
+    });
+    if (r.status === 403) {
+      localStorage.removeItem(MODE_TOKEN_KEY);
+      alert('토큰이 올바르지 않습니다. 다시 시도하세요.');
+      return;
+    }
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      alert('전환 요청 실패: ' + (j.detail || r.statusText));
+      return;
+    }
+    alert('전환 요청 전송됨. 잠시 후 wrapper 가 재시작됩니다 (페이지 자동 새로고침).');
+  } catch (e) {
+    alert('전환 요청 실패: ' + e.message);
+  }
+}
+
+document.getElementById('modeBtns').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-target]');
+  if (btn) requestModeSwitch(btn.dataset.target);
+});
+
 refresh();
+refreshModeButtons();
 setInterval(refresh, 10000);
+setInterval(refreshModeButtons, 15000);
 </script>
 </body>
 </html>

@@ -26,7 +26,14 @@ OCR_BACKENDS = [s.strip() for s in os.getenv("OCR_BACKENDS", "chandra-a,chandra-
 OCR_BACKEND_PORT = int(os.getenv("OCR_BACKEND_PORT", "8000"))
 OCR_PER_BACKEND_CONCURRENCY = int(os.getenv("OCR_PER_BACKEND_CONCURRENCY", "6"))
 COMPOSE_PATH = os.getenv("COMPOSE_PATH", "/etc/ocrserver-compose.yml")
+MODE_TOKEN = os.getenv("MODE_TOKEN", "")  # empty disables /api/mode entirely
+MODE_REQUEST_PATH = os.getenv("MODE_REQUEST_PATH", "/data/mode_request")
 _RETRY_DELAYS = [5, 15, 30, 60]
+
+# When True, the host-side switcher is about to recreate this wrapper container.
+# /ocr POST rejects new jobs while this is set so we don't accept work that the
+# fresh wrapper would have to resume mid-transition.
+_mode_switching = False
 
 _jobs: dict[str, dict] = {}
 _sem: asyncio.Semaphore
@@ -503,6 +510,38 @@ async def api_stats():
     }
 
 
+@app.post("/api/mode")
+async def api_mode(
+    payload: dict,
+    x_mode_token: str | None = Header(None, alias="X-Mode-Token"),
+):
+    """Request a host-side mode switch (ocr | llm). The host's systemd path
+    unit watches MODE_REQUEST_PATH and runs mode-{ocr,llm}.sh which itself
+    recreates the wrapper container. We set _mode_switching so that /ocr
+    submits get 503 until the recreate."""
+    global _mode_switching
+    if not MODE_TOKEN:
+        raise HTTPException(status_code=503, detail="mode switching disabled (no MODE_TOKEN)")
+    if x_mode_token != MODE_TOKEN:
+        raise HTTPException(status_code=403, detail="invalid token")
+    mode = (payload or {}).get("mode")
+    if mode not in ("ocr", "llm"):
+        raise HTTPException(status_code=400, detail="mode must be 'ocr' or 'llm'")
+    os.makedirs(os.path.dirname(MODE_REQUEST_PATH), exist_ok=True)
+    with open(MODE_REQUEST_PATH, "w") as f:
+        f.write(f"{mode}\n")
+    _mode_switching = True
+    return {"requested": mode, "switching": True}
+
+
+@app.get("/api/mode")
+async def api_mode_status():
+    return {
+        "enabled": bool(MODE_TOKEN),
+        "switching": _mode_switching,
+    }
+
+
 @app.post("/ocr")
 async def submit(
     background_tasks: BackgroundTasks,
@@ -510,6 +549,8 @@ async def submit(
     client_id: str | None = Form(None),
     x_client_id: str | None = Header(None),
 ):
+    if _mode_switching:
+        raise HTTPException(status_code=503, detail="mode switch in progress, please retry shortly")
     if client_id is None:
         client_id = x_client_id
     pdf_bytes = await file.read()

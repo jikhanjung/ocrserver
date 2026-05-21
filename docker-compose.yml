@@ -5,18 +5,20 @@ services:
       - "8080:80"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx-errors:/etc/nginx/errors:ro
     depends_on:
       - chandra-a
       - wrapper
     restart: unless-stopped
 
   wrapper:
-    image: honestjung/ocrwrapper:0.1.6
+    image: honestjung/ocrwrapper:0.1.7
     environment:
       VLLM_URL: http://nginx:80
       OCR_CONCURRENCY: "${OCR_CONCURRENCY:-6}"
       OCR_DPI: "150"
       DB_PATH: /data/ocrserver.db
+      MODE_TOKEN: "${MODE_TOKEN:-}"
     volumes:
       - ./data:/data
       - ./docker-compose.yml:/etc/ocrserver-compose.yml:ro

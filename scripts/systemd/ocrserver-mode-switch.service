@@ -1,0 +1,8 @@
+[Unit]
+Description=Switch ocrserver mode based on /srv/ocrserver/data/mode_request
+
+[Service]
+Type=oneshot
+ExecStart=/srv/ocrserver/scripts/mode_switcher.sh
+StandardOutput=journal
+StandardError=journal
