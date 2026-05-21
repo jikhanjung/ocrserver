@@ -1,35 +1,23 @@
-# HANDOFF — 2026-05-21
+# HANDOFF — 2026-05-21 (chandra 0.1.1 build/push)
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-05-20 세션)
+## 방금 한 작업 (2026-05-21 세션 #2)
 
-`/metrics`(현재 라벨 "통계") 신규 도입부터 헤더 통일/페이지네이션까지
-한 세션에 집중됨. wrapper 이미지는 `0.1.0 → 0.1.4` 까지 핀.
+- chandra (`honestjung/ocrserver`) **`:0.1.1` 빌드 + Docker Hub push** 완료.
+  - Manifest digest: `sha256:f6117fbbb2caa866d8349b72bc0d7d11ecc176ff1e4790562f083774fa3d380c`
+  - Image ID: `f6117fbbb2ca`, content 17 GB.
+  - `:0.1.1` 과 `:latest` 둘 다 같은 digest 로 Hub 에 올라감.
+  - 직전 세션(020)에서 deferred 됐던 항목. KOPRI 호스트의 12% stuck 함정이
+    이번엔 **재현되지 않음** — 베이스 이미지를 fresh 로 받으면서 buildkit
+    state 가 리셋된 영향일 가능성. 상세는 `devlog/20260521_021_*.md`.
+- 직전 세션(2026-05-20)의 wrapper 0.1.0 → 0.1.6 작업은 그대로 운영 중.
 
-| 커밋 | 내용 |
+| 커밋 (예정) | 내용 |
 |---|---|
-| `b898d54` | scripts/metrics_collector.py + systemd timer + `/api/metrics` + `/metrics` 페이지 (Chart.js 6종) |
-| `bdc50ee` | 이미지 0.1.0 핀, wrapper 네임스페이스 `ocrserver-wrapper` → `honestjung/ocrwrapper` |
-| `93659aa` | wrapper 0.1.0 Docker Hub push 기록 |
-| `c94ab4c` | `pages.completed_at` 컬럼 추가, `/api/metrics` 에 `pages_per_step` 시리즈, 차트 듀얼축 → 0.1.1 |
-| `fc06241` | wrapper 0.1.1 push 기록 |
-| `cab7ed3` | `/status` 재작성: 모드 배지, OCR 백엔드 카드, LLM 모드별 conditional, 빠른 테스트 정리 → 0.1.2 |
-| `dfd5d6c` | wrapper 0.1.2 push 기록 |
-| `e168055` | `/metrics` 차트 카드에 "활성 구간 평균 N 페이지/분 · M 문서/분" 텍스트 → 0.1.3 |
-| `9a8685c` | devlog 017 |
-| `4f4dfa0` | HANDOFF.md 신규 |
-| `526755c`, `d14e923` | CLAUDE.md 신규 (세션 시작 시 HANDOFF.md 읽기 지시 + 프로젝트 개요) |
-| `17ec29b` | 헤더 통일(`#1a2f5a`), context-strip 분리, `/api/jobs` 페이지네이션, "메트릭"→"통계" 라벨 → 0.1.4 |
-| `91ede86` | wrapper 0.1.4 push 기록 |
-| `cdf99c8`, `53d5ea2` | HANDOFF 갱신 + 0.1.4 deploy |
-| `b54dd38` | CDN 4개 제거, bootstrap/chart.js/adapter 를 `wrapper/static/` 에 내장, nginx 에 `/static/` 라우트 추가 → 0.1.5 |
-| `45a5546` | wrapper 0.1.5 push 기록 |
-| `d7fdc32`, `2e12236` | HANDOFF 갱신 + 0.1.5 deploy |
-| `6071f3d` | `/status` 에 컨테이너 이미지 태그 뱃지 (compose 파싱) → 0.1.6 |
-| `ce8592b` | chandra :0.1.1 빌드 12% stuck 으로 :0.1.0 revert + CLAUDE.md 함정 명시 |
+| TBD | `devlog/20260521_021_chandra_0_1_1_build.md` 추가 + HANDOFF 갱신 |
 
-상세는 `devlog/20260520_013_*.md` ~ `_020_*.md`.
+상세는 `devlog/20260521_021_chandra_0_1_1_build.md`.
 
 ## 현재 상태 (snapshot)
 
@@ -38,58 +26,55 @@
 - 운영 디렉터리: `/srv/ocrserver/` (jikhanjung 소유, sudo 없이 docker compose 가능)
 - 운영 컴포즈는 prebuilt image 만 참조 (build 는 dev tree 에서)
 
-### 컨테이너 / 이미지
+### 컨테이너 / 이미지 (운영서버, 직전 세션 기준 — 아직 chandra bump 전)
 ```
 SERVICE     IMAGE                         STATUS
-chandra-a   honestjung/ocrserver:0.1.0    Up 20h (healthy)
-chandra-b   honestjung/ocrserver:latest   Up 42h (이전 세션 시작분, profile=ocr)
-nginx       nginx:alpine                  Up 42h
-wrapper     honestjung/ocrwrapper:0.1.6   Up (방금 swap, 0.1.5 → 0.1.6)
+chandra-a   honestjung/ocrserver:0.1.0    Up (healthy)
+chandra-b   honestjung/ocrserver:latest   Up (이전 세션 시작분, profile=ocr)
+nginx       nginx:alpine                  Up
+wrapper     honestjung/ocrwrapper:0.1.6   Up
 ```
 
-- 빌드된 wrapper 태그: `0.1.0` (`5d6f28afa428`), `0.1.1` (`ec0e23a5b770`),
-  `0.1.2` (`ae365f7ab413`), `0.1.3` (`ebc4d672c9fa`), `0.1.4` (`fac3ca93673f`),
-  `0.1.5` (`17d5cfbefbb5`), `0.1.6` (`308861f8931a`). 전부 Docker Hub
-  `honestjung/ocrwrapper` 에 push 완료, `:latest` 는 0.1.6.
-- chandra 이미지는 `:0.1.0` 으로 로컬 retag 만, Hub push 안 함
-  (7일 전 pull 본 digest 라 stale 가능성 — `feedback_retag_push_safety` 참고).
+- Docker Hub `honestjung/ocrserver` 상태: `:0.1.0`, `:0.1.1`, `:latest` 셋 다 존재.
+  `:0.1.1` 과 `:latest` 가 같은 digest (`f6117fbbb2ca...`).
+- 운영서버 chandra 는 아직 `:0.1.0` — 다음 작업에서 `:0.1.1` 로 swap.
 
 ### 호스트 메트릭
 - `ocrserver-metrics.timer` 활성, 1분 주기 → `/srv/ocrserver/data/metrics.db`
-- wrapper 컨테이너는 read-only 로 `/data/metrics.db` mount 해서 `/api/metrics` 서빙
+- wrapper 컨테이너는 read-only 로 `/data/metrics.db` mount
 - wrapper 가 `/srv/ocrserver/docker-compose.yml` 도 RO 마운트 (`/etc/ocrserver-compose.yml`)
   해서 `/api/services._meta.images` 로 노출 (60s TTL)
 
-### 작업 상태 (`ocrserver.db.jobs`)
-- done: 2953, done_with_errors: 6, failed: 5, processing: 0
-- 모든 OCR 완료.
-
-### compose / nginx 파일 상태
-- dev tree 와 `/srv/ocrserver/` 모두 wrapper `0.1.6` + 새 nginx conf 일치.
-- 정적 자산 + 이미지 표시 검증 완료.
-
 ## 곧 해야 할 작업
 
-1. **chandra `:0.1.1` 외부 빌드 + Hub push** (이번 세션 deferred)
-   - 이 호스트 빌드는 12% (2/17 files) 에서 reproducibly stuck — CLAUDE.md
-     "Known gotcha" 섹션 참조.
-   - 다른 망 머신(노트북, RunPod 등) 에서 `docker build -t honestjung/ocrserver:0.1.1
-     -t honestjung/ocrserver:latest .` → `docker push` × 2.
-   - 그 다음 이 호스트에서 `docker pull honestjung/ocrserver:0.1.1` →
-     compose chandra-a/b 를 `:0.1.1` 로 bump → `docker compose up -d` × 2 (cold
-     start 4-5분 × 2 GPU).
+1. **운영서버에서 chandra `:0.1.1` swap** (이번 세션 산출물 활용)
+   ```bash
+   # 운영서버에서
+   docker pull honestjung/ocrserver:0.1.1
+   # dev tree 의 docker-compose.yml 에서 chandra-a/b 의 image 태그를
+   # :0.1.0 → :0.1.1 로 bump → /srv/ocrserver/ 로 sync
+   cp /home/jikhanjung/projects/ocrserver/docker-compose.yml /srv/ocrserver/
+   cd /srv/ocrserver && docker compose up -d chandra-a chandra-b
+   # 각 GPU 별 cold start 4–5분
+   ```
+   확인: `/status` 의 이미지 뱃지가 `chandra-a 0.1.1` / `chandra-b 0.1.1`
+   로 바뀌면 ok.
 
-2. **chandra-b 이미지 표시 정렬** (선택)
-   - chandra-b 가 IMAGE 컬럼에 `:latest` 로 표시되는데 운영본 compose 는
-     `:0.1.0` 으로 적어둠. 같은 digest 라 동작 동일, 보기엔 어색.
-   - 위 1번 작업 시 자연스럽게 같이 정리됨.
+2. **chandra-b 이미지 표시 정렬** (1번과 자연스럽게 같이 해소)
+   - 운영본 compose 의 `chandra-b: image:` 도 `:0.1.1` 로 명시.
 
-3. **HANDOFF.md 유지** — 다음 작업 끝낼 때 이 파일도 같이 갱신.
+3. **이번 세션 결과 커밋**
+   - `devlog/20260521_021_chandra_0_1_1_build.md`
+   - `HANDOFF.md` (이 파일)
+   - 단일 커밋 권장.
+
+4. **HANDOFF.md 유지** — 다음 작업 끝낼 때 이 파일도 같이 갱신.
 
 ## 참고 위치
 
-- 데브로그: `devlog/20260520_013_*.md` ~ `_020_*.md`
+- 데브로그: `devlog/20260520_013_*.md` ~ `20260521_021_*.md`
 - 메모리(자동 컨텍스트): `~/.claude/projects/-home-jikhanjung-projects-ocrserver/memory/`
+  - `feedback_dev_vs_ops_host.md` — 이 host 는 dev/빌드 트리, 운영 docker 상태 조회 X
 - 메트릭 스크립트: `scripts/metrics_collector.py`, `scripts/systemd/`
 - 운영 명령:
   ```bash
