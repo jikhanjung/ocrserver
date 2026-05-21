@@ -1,4 +1,4 @@
-# HANDOFF — 2026-05-21 (chandra 0.1.1 build/push + ops swap)
+# HANDOFF — 2026-05-21 (chandra 0.1.1 swap + web mode switch)
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
@@ -17,9 +17,20 @@
   bump → `docker compose up -d chandra-a chandra-b` → 두 GPU 모두 cold start
   통과 후 healthy. `/api/services._meta.images` 와 `/status` 뱃지에 0.1.1
   반영 확인.
+- 운영 호스트 세션 #4: 웹에서 모드 전환 + wrapper 재시작 동안 nginx 의
+  "재시작 중" 자동 새로고침 페이지 (`/status` 의 `→ OCR` / `→ LLM` 버튼).
+  - 새 wrapper 이미지 `:0.1.7` (digest `600a9d7213f1...`) build + Hub push +
+    swap 완료.
+  - `nginx-errors/` 디렉터리 dev tree 추가 + nginx 컨테이너에 RO 마운트.
+    양쪽 nginx conf 에 `proxy_intercept_errors` + `error_page → /__restarting`.
+  - 호스트 `/etc/systemd/system/ocrserver-mode-switch.{path,service}` 활성.
+    `/srv/ocrserver/data/mode_request` 가 생기면 `mode_switcher.sh` 가
+    `mode-{ocr,llm}.sh` 실행. docker socket 노출 없음.
+  - `.env` 에 `MODE_TOKEN` 추가, wrapper env 로 전달. (값은 `.env` 파일 참조.)
+  - 상세는 `devlog/20260521_022_*.md`.
 - 직전 세션(2026-05-20)의 wrapper 0.1.0 → 0.1.6 작업은 그대로 운영 중.
 
-상세는 `devlog/20260521_021_*.md`.
+상세는 `devlog/20260521_021_*.md` ~ `_022_*.md`.
 
 ## 현재 상태 (snapshot)
 
@@ -31,10 +42,10 @@
 ### 컨테이너 / 이미지 (운영서버)
 ```
 SERVICE     IMAGE                         STATUS
-chandra-a   honestjung/ocrserver:0.1.1    Up (healthy, 방금 swap)
-chandra-b   honestjung/ocrserver:0.1.1    Up (healthy, 방금 swap)
-nginx       nginx:alpine                  Up 45h
-wrapper     honestjung/ocrwrapper:0.1.6   Up 3h
+chandra-a   honestjung/ocrserver:0.1.1    Up (healthy)
+chandra-b   honestjung/ocrserver:0.1.1    Up (healthy)
+nginx       nginx:alpine                  Up (방금 recreate, errors/ 마운트)
+wrapper     honestjung/ocrwrapper:0.1.7   Up (방금 swap, MODE_TOKEN 활성)
 ```
 
 - Docker Hub `honestjung/ocrserver` 상태: `:0.1.0`, `:0.1.1`, `:latest` 셋 다 존재.
@@ -50,14 +61,17 @@ wrapper     honestjung/ocrwrapper:0.1.6   Up 3h
 
 ## 곧 해야 할 작업
 
-1. **HANDOFF.md 유지** — 다음 작업 끝낼 때 이 파일도 같이 갱신.
+1. **모드 전환 동작 실측** (선택, 운영 영향)
+   - `/status` 의 `→ LLM` 버튼 클릭 → 토큰 입력 → mode-llm.sh 가 실행되며
+     wrapper recreate. 브라우저는 nginx 재시작 페이지로 자동 새로고침되어야 함.
+   - 후 `→ OCR` 로 복귀.
+   - 굳이 지금 안 해도 동작은 검증된 상태 (API + systemd + 마운트 모두 OK).
 
-(현 시점 운영-side 미결 작업 없음. chandra 0.1.1 swap 완료, image 뱃지 정합,
-chandra-b 표시 mismatch 해소.)
+2. **HANDOFF.md 유지** — 다음 작업 끝낼 때 이 파일도 같이 갱신.
 
 ## 참고 위치
 
-- 데브로그: `devlog/20260520_013_*.md` ~ `20260521_021_*.md`
+- 데브로그: `devlog/20260520_013_*.md` ~ `20260521_022_*.md`
 - 메모리(자동 컨텍스트): `~/.claude/projects/-home-jikhanjung-projects-ocrserver/memory/`
   - `feedback_dev_vs_ops_host.md` — 이 host 는 dev/빌드 트리, 운영 docker 상태 조회 X
 - 메트릭 스크립트: `scripts/metrics_collector.py`, `scripts/systemd/`
