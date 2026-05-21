@@ -6,7 +6,13 @@ cd /srv/ocrserver
 echo "[mode] chandra-b 중지..."
 docker compose --profile ocr stop chandra-b 2>/dev/null || true
 
-echo "OCR_CONCURRENCY=6" > .env
+# Update OCR_CONCURRENCY in place, preserving other env vars (MODE_TOKEN, etc).
+touch .env
+if grep -q "^OCR_CONCURRENCY=" .env; then
+    sed -i "s/^OCR_CONCURRENCY=.*/OCR_CONCURRENCY=6/" .env
+else
+    echo "OCR_CONCURRENCY=6" >> .env
+fi
 
 echo "[mode] nginx config -> LLM (chandra-a only)..."
 cp nginx.llm.conf nginx.conf

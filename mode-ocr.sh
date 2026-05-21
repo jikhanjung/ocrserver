@@ -6,7 +6,13 @@ cd /srv/ocrserver
 echo "[mode] LLM 중지..."
 docker compose --profile llm stop llm 2>/dev/null || true
 
-echo "OCR_CONCURRENCY=12" > .env
+# Update OCR_CONCURRENCY in place, preserving other env vars (MODE_TOKEN, etc).
+touch .env
+if grep -q "^OCR_CONCURRENCY=" .env; then
+    sed -i "s/^OCR_CONCURRENCY=.*/OCR_CONCURRENCY=12/" .env
+else
+    echo "OCR_CONCURRENCY=12" >> .env
+fi
 
 echo "[mode] chandra-b 기동 (GPU 1)..."
 docker compose --profile ocr up -d chandra-b

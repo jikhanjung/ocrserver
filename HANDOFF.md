@@ -17,6 +17,12 @@
   bump → `docker compose up -d chandra-a chandra-b` → 두 GPU 모두 cold start
   통과 후 healthy. `/api/services._meta.images` 와 `/status` 뱃지에 0.1.1
   반영 확인.
+- 운영 호스트 세션 #5: 모드 버튼 다듬기 → wrapper `0.1.8`.
+  - 현재 모드 버튼은 disabled + filled 색으로 강조 (클릭 자체 차단).
+  - 버튼 라벨 `OCR×2` / `OCR+LLM` 로 명료화.
+  - mode-{ocr,llm}.sh 의 `.env` overwrite 버그 수정 (sed in-place 로
+    `OCR_CONCURRENCY` 만 갱신, `MODE_TOKEN` 등 보존).
+  - 상세 `devlog/20260521_023_*.md`.
 - 운영 호스트 세션 #4: 웹에서 모드 전환 + wrapper 재시작 동안 nginx 의
   "재시작 중" 자동 새로고침 페이지 (`/status` 의 `→ OCR` / `→ LLM` 버튼).
   - 새 wrapper 이미지 `:0.1.7` (digest `600a9d7213f1...`) build + Hub push +
@@ -45,7 +51,7 @@ SERVICE     IMAGE                         STATUS
 chandra-a   honestjung/ocrserver:0.1.1    Up (healthy)
 chandra-b   honestjung/ocrserver:0.1.1    Up (healthy)
 nginx       nginx:alpine                  Up (방금 recreate, errors/ 마운트)
-wrapper     honestjung/ocrwrapper:0.1.7   Up (방금 swap, MODE_TOKEN 활성)
+wrapper     honestjung/ocrwrapper:0.1.8   Up (방금 swap)
 ```
 
 - Docker Hub `honestjung/ocrserver` 상태: `:0.1.0`, `:0.1.1`, `:latest` 셋 다 존재.
@@ -71,7 +77,7 @@ wrapper     honestjung/ocrwrapper:0.1.7   Up (방금 swap, MODE_TOKEN 활성)
 
 ## 참고 위치
 
-- 데브로그: `devlog/20260520_013_*.md` ~ `20260521_022_*.md`
+- 데브로그: `devlog/20260520_013_*.md` ~ `20260521_023_*.md`
 - 메모리(자동 컨텍스트): `~/.claude/projects/-home-jikhanjung-projects-ocrserver/memory/`
   - `feedback_dev_vs_ops_host.md` — 이 host 는 dev/빌드 트리, 운영 docker 상태 조회 X
 - 메트릭 스크립트: `scripts/metrics_collector.py`, `scripts/systemd/`

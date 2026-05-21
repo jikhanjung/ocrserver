@@ -74,8 +74,8 @@
           <div class="mt-1 d-flex align-items-center gap-2">
             <span id="modeChip" class="mode-chip muted">확인 중...</span>
             <div class="btn-group btn-group-sm" id="modeBtns" style="display:none">
-              <button class="btn btn-outline-secondary" data-target="ocr" title="OCR 2 GPU 모드로 전환">→ OCR</button>
-              <button class="btn btn-outline-secondary" data-target="llm" title="LLM + OCR 1 GPU 모드로 전환">→ LLM</button>
+              <button class="btn btn-outline-secondary" data-target="ocr">OCR×2</button>
+              <button class="btn btn-outline-secondary" data-target="llm">OCR+LLM</button>
             </div>
           </div>
         </div>
@@ -276,9 +276,10 @@ function renderQuickTests(mode) {
 
 async function refresh() {
   try {
-    const [svc, stats] = await Promise.all([
+    const [svc, stats, modeStatus] = await Promise.all([
       fetch('/api/services').then(r=>r.json()),
       fetch('/api/stats').then(r=>r.json()),
+      fetch('/api/mode').then(r=>r.json()).catch(()=>({enabled:false, switching:false})),
     ]);
 
     const mode = svc._meta?.mode || stats.mode || '?';
@@ -296,6 +297,9 @@ async function refresh() {
       (rec && conc && rec !== conc) ? ` (권장 ${rec})` : '';
     document.getElementById('totalJobs').textContent = stats.counts?.total ?? '—';
     document.getElementById('processingJobs').textContent = stats.counts?.processing ?? '—';
+
+    // Mode switch buttons (disable button matching current mode)
+    updateModeButtons(modeStatus.enabled, modeStatus.switching, mode);
 
     // Container images (from compose file mounted RO into wrapper)
     renderImages(svc._meta?.images || {});
@@ -364,14 +368,30 @@ async function testEndpoint(path, targetId) {
 // ── Mode switch ────────────────────────────────────────────────────────────
 const MODE_TOKEN_KEY = 'ocrserver.mode_token';
 
-async function refreshModeButtons() {
-  try {
-    const r = await fetch('/api/mode');
-    const m = await r.json();
-    const btns = document.getElementById('modeBtns');
-    btns.style.display = m.enabled ? '' : 'none';
-    btns.querySelectorAll('button').forEach(b => { b.disabled = m.switching; });
-  } catch (e) { /* ignore — nav banner will show if wrapper is down */ }
+// Map current mode probe value to which script's target represents it:
+//   mode-ocr.sh ⇒ 'ocr' / '2ocr'  (no llm)
+//   mode-llm.sh ⇒ 'llm+ocr' / 'llm+2ocr' / 'llm'
+function currentScriptTarget(mode) {
+  if (!mode || mode === 'down') return null;
+  return mode.includes('llm') ? 'llm' : 'ocr';
+}
+
+function updateModeButtons(enabled, switching, currentMode) {
+  const btns = document.getElementById('modeBtns');
+  btns.style.display = enabled ? '' : 'none';
+  if (!enabled) return;
+  const cur = currentScriptTarget(currentMode);
+  btns.querySelectorAll('button').forEach(b => {
+    const t = b.dataset.target;
+    const isCurrent = (t === cur);
+    b.disabled = switching || isCurrent;
+    b.classList.toggle('btn-outline-secondary', !isCurrent);
+    b.classList.toggle('btn-secondary', isCurrent);
+    b.classList.toggle('active', isCurrent);
+    b.title = isCurrent
+      ? '현재 모드'
+      : (t === 'ocr' ? 'OCR×2 (양 GPU OCR) 모드로 전환' : 'OCR+LLM (1 GPU OCR + 1 GPU LLM) 모드로 전환');
+  });
 }
 
 async function requestModeSwitch(target) {
@@ -420,9 +440,7 @@ document.getElementById('modeBtns').addEventListener('click', (e) => {
 });
 
 refresh();
-refreshModeButtons();
 setInterval(refresh, 10000);
-setInterval(refreshModeButtons, 15000);
 </script>
 </body>
 </html>

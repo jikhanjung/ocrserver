@@ -12,7 +12,7 @@ services:
     restart: unless-stopped
 
   wrapper:
-    image: honestjung/ocrwrapper:0.1.7
+    image: honestjung/ocrwrapper:0.1.8
     build:
       context: ./wrapper
     environment:
