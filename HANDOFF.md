@@ -38,10 +38,10 @@
 ### 컨테이너 / 이미지
 ```
 SERVICE     IMAGE                         STATUS
-chandra-a   honestjung/ocrserver:0.1.0    Up 7h (healthy)
-chandra-b   honestjung/ocrserver:latest   Up 30h (이전 세션 시작분, profile=ocr)
-nginx       nginx:alpine                  Up 30h
-wrapper     honestjung/ocrwrapper:0.1.4   Up 2h  ← 운영 중 (0.1.5 빌드/push 했지만 미배포)
+chandra-a   honestjung/ocrserver:0.1.0    Up 18h (healthy)
+chandra-b   honestjung/ocrserver:latest   Up 41h (이전 세션 시작분, profile=ocr)
+nginx       nginx:alpine                  Up 41h (방금 reload, /static/ 라우트 활성)
+wrapper     honestjung/ocrwrapper:0.1.5   Up (방금 swap, 0.1.4 → 0.1.5)
 ```
 
 - 빌드된 wrapper 태그: `0.1.0` (`5d6f28afa428`), `0.1.1` (`ec0e23a5b770`),
@@ -57,35 +57,17 @@ wrapper     honestjung/ocrwrapper:0.1.4   Up 2h  ← 운영 중 (0.1.5 빌드/pu
 - wrapper 컨테이너는 read-only 로 `/data/metrics.db` mount 해서 `/api/metrics` 서빙
 
 ### 작업 상태 (`ocrserver.db.jobs`)
-- done: 2488, done_with_errors: 6, failed: 5, processing: 4
-- **현재 OCR 작업 진행 중** — `processing` 4건. 0.1.5 배포는 끝난 뒤 권장.
+- done: 2953, done_with_errors: 6, failed: 5, processing: 0
+- 모든 OCR 완료, 새 wrapper 가 fresh 상태로 떠있음.
 
 ### compose / nginx 파일 상태
-- dev tree: wrapper `0.1.5`, nginx conf 들이 `/static/` 라우트 추가된 새 버전.
-- `/srv/ocrserver/` : wrapper `0.1.4`, nginx conf 는 구버전 (`/static/` 없음).
-- 0.1.5 swap 직전에 docker-compose.yml **+ 두 nginx conf** 모두 sync 필요.
+- dev tree 와 `/srv/ocrserver/` 모두 wrapper `0.1.5` + 새 nginx conf 일치.
+- 정적 자산 검증: `/static/{bootstrap.min.css,chart.umd.min.js,chartjs-adapter-date-fns.bundle.min.js}`
+  세 파일 모두 200 응답, content-type 정상.
 
 ## 곧 해야 할 작업
 
-1. **OCR 작업 끝나면 wrapper 0.1.5 swap** (nginx conf 동기화 필수)
-   ```bash
-   # 1. compose + nginx conf sync
-   cp /home/jikhanjung/projects/ocrserver/docker-compose.yml /srv/ocrserver/
-   cp /home/jikhanjung/projects/ocrserver/nginx.ocr.conf /srv/ocrserver/
-   cp /home/jikhanjung/projects/ocrserver/nginx.llm.conf /srv/ocrserver/
-   cp /srv/ocrserver/nginx.ocr.conf /srv/ocrserver/nginx.conf  # 현재 OCR 모드
-
-   # 2. wrapper recreate + nginx reload
-   cd /srv/ocrserver && docker compose up -d wrapper \
-       && docker compose exec nginx nginx -s reload
-
-   # 3. 확인
-   curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/static/bootstrap.min.css
-   ```
-   nginx conf 를 sync 안 하면 `/static/*` 가 chandra 업스트림으로 떨어져
-   404 — UI 가 unstyled 로 뜸. devlog 019 참조.
-
-2. **chandra-b 이미지 표시 정렬** (선택)
+1. **chandra-b 이미지 표시 정렬** (선택)
    - chandra-b 가 IMAGE 컬럼에 `:latest` 로 표시되는데, 운영본 compose 는
      `:0.1.0` 으로 적어둠. 같은 digest 라 동작은 동일하지만 보기엔 어색.
    - `docker compose --profile ocr up -d chandra-b` 하면 desired tag 일치 위해
