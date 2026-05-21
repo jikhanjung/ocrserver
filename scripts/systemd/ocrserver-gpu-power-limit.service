@@ -1,0 +1,13 @@
+[Unit]
+Description=Cap NVIDIA GPU power limit to 230W (Quadro RTX 8000 ×2)
+After=nvidia-persistenced.service
+Wants=nvidia-persistenced.service
+Before=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/nvidia-smi -pl 230
+
+[Install]
+WantedBy=multi-user.target

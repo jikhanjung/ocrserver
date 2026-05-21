@@ -6,7 +6,7 @@
 
 오늘은 chandra 0.1.1 swap → 웹 모드 전환 UI → NVML mismatch 인시던트 발생
 → reboot 복구 → 모드 전환 실측까지 한 호흡으로 진행. 세부는 `devlog/20260521_021_*.md`
-~ `_023_*.md` 와 devlog 후속 항목 참고.
+~ `_024_*.md` 참고 (특히 #6~#9 는 024 한 묶음으로 정리).
 
 - **세션 #2 (외부 빌드 호스트)**: chandra (`honestjung/ocrserver`) **`:0.1.1`
   빌드 + Docker Hub push**. Manifest digest
@@ -52,6 +52,12 @@
 - **세션 #9 (모드 전환 OCR+LLM → OCR×2)**: 웹 버튼 → mode-ocr.sh → llm
   stop → chandra-b 재기동 (vLLM cold start ~4분 30초) → healthy 07:33:07Z.
   mode probe `2ocr` 확정. 양방향 모드 전환 시나리오 둘 다 실측 통과.
+- **세션 #10 (GPU 전력 한도 영구화)**: 두 RTX 8000 의 power limit 230W 가
+  reboot 마다 default 260W 로 휘발하던 것을 systemd oneshot unit
+  (`ocrserver-gpu-power-limit.service`) 으로 boot-time 자동 적용.
+  `/etc/systemd/system/` 에 설치 + `enable --now` 완료, unit `active (exited)`.
+  reboot 후 자동 재적용 검증은 다음 reboot 기회에. 상세
+  `devlog/20260521_025_*.md`.
 
 ## 현재 상태 (snapshot)
 
@@ -95,7 +101,7 @@ OCR+LLM 모드로 전환하려면 `/status` 의 `→ LLM` 버튼 또는
 
 ## 참고 위치
 
-- 데브로그: `devlog/20260520_013_*.md` ~ `20260521_023_*.md`
+- 데브로그: `devlog/20260520_013_*.md` ~ `20260521_025_*.md`
 - 메모리(자동 컨텍스트): `~/.claude/projects/-home-jikhanjung-projects-ocrserver/memory/`
   - `feedback_dev_vs_ops_host.md` — 이 host 는 dev/빌드 트리이자 운영 호스트
     (현재는 같은 머신)
