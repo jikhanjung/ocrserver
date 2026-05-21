@@ -65,15 +65,60 @@ wrapper     honestjung/ocrwrapper:0.1.8   Up (방금 swap)
 - wrapper 가 `/srv/ocrserver/docker-compose.yml` 도 RO 마운트 (`/etc/ocrserver-compose.yml`)
   해서 `/api/services._meta.images` 로 노출 (60s TTL)
 
+## 🚨 진행 중 인시던트 — NVIDIA 드라이버 mismatch (2026-05-21 ~07:00 UTC)
+
+세션 #6 에서 OCR×2 → OCR+LLM 모드 전환 (`/status` 버튼) 테스트하다 mode-llm.sh
+가 llm 컨테이너 띄우는 단계에서 실패. 원인:
+`Failed to initialize NVML: Driver/library version mismatch — NVML library
+version: 595.71`. 호스트 unattended-upgrades 가 NVIDIA 드라이버 userland 만
+업그레이드, 커널 모듈 reload 안 된 상태. 06:04 UTC 에 nvidia-persistenced
+가 SIGTERM 으로 stop. 이미 떠있던 chandra-a 는 GPU 0 reserve 중이라 영향
+없지만 새 GPU 컨테이너 (llm) 시작 불가.
+
+### 현재 상태 (reboot 직전)
+- chandra-a: Up healthy (GPU 0, 영향 없음)
+- chandra-b: stopped (mode-llm.sh 가 시작에 stop 함)
+- llm: 시작 실패 (NVML mismatch)
+- nginx: Up — 다만 `nginx.conf` 가 mode-llm.sh 가 복사한 `nginx.llm.conf` 상태
+  (`/llm/` route 있으나 llm 컨테이너 없음 → 502)
+- wrapper 0.1.8: Up — `_mode_switching=True` 갇혀서 새 OCR POST 503 거부 중
+- mode probe: `1ocr` (chandra-a 만 alive)
+
+### 복구 절차 (reboot 후)
+```bash
+# 1. 부팅 확인 + nvidia-smi 정상 동작 (NVML version 일치)
+nvidia-smi
+
+# 2. 컨테이너 상태 확인
+cd /srv/ocrserver && docker compose ps
+#  - chandra-a 는 unless-stopped 로 auto-restart
+#  - chandra-b 는 stopped 였으므로 auto-restart 안 함
+#  - nginx 는 nginx.llm.conf 인 상태 그대로
+#  - wrapper 는 fresh start → _mode_switching 자동 리셋
+
+# 3. OCR×2 모드로 복귀 (mode-ocr.sh 가 모든 정리 해줌)
+/srv/ocrserver/mode-ocr.sh
+#  - chandra-b 기동 (이번엔 nvidia OK 라서 정상)
+#  - chandra-b health 대기 ~5분
+#  - nginx.conf ← nginx.ocr.conf
+#  - wrapper recreate
+#  - 끝나면 mode probe 가 '2ocr' 로 복귀
+
+# 4. 검증
+curl -s http://localhost:8080/api/services | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['_meta']['mode'])"
+# 기대값: 2ocr
+```
+
+mode 전환 자체 검증은 OCR×2 정상화된 다음 다시 시도 (이번엔 nvidia OK
+이므로 llm 컨테이너 정상 기동되어야 함).
+
 ## 곧 해야 할 작업
 
-1. **모드 전환 동작 실측** (선택, 운영 영향)
-   - `/status` 의 `→ LLM` 버튼 클릭 → 토큰 입력 → mode-llm.sh 가 실행되며
-     wrapper recreate. 브라우저는 nginx 재시작 페이지로 자동 새로고침되어야 함.
-   - 후 `→ OCR` 로 복귀.
-   - 굳이 지금 안 해도 동작은 검증된 상태 (API + systemd + 마운트 모두 OK).
+1. **위 복구 절차 실행 (reboot + mode-ocr.sh)** ← 최우선
 
-2. **HANDOFF.md 유지** — 다음 작업 끝낼 때 이 파일도 같이 갱신.
+2. **모드 전환 동작 실측 재시도** (1번 완료 후)
+
+3. **HANDOFF.md 유지** — 복구 끝나면 이 인시던트 섹션 제거.
 
 ## 참고 위치
 
