@@ -1,8 +1,34 @@
-# HANDOFF — 2026-05-26 (금요일 freeze 인시던트 진단 + watchdog 활성화)
+# HANDOFF — 2026-05-27 (/api/ no-store + nginx error passthrough, wrapper 0.1.9)
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-05-26)
+## 방금 한 작업 (2026-05-27)
+
+`/metrics` 페이지의 **6h 탭만** 그래프가 안 나오는 버그 진단 + 수정.
+세부 `devlog/20260527_027_api_no_store_and_error_passthrough.md`.
+
+- **증상**: Edge/Chrome 둘 다 6h 탭에서 `SyntaxError: Unexpected token '<'`.
+  fetch 가 `<!doctype html>...` 를 200 으로 받음. 1h/24h/7d 는 정상.
+- **원인**: ① `nginx.ocr.conf` `/api/` 의 `error_page 502 504 = /__restarting;`
+  가 wrapper 잠깐 죽었을 때 HTML 200 응답으로 덮어쓰고, ② 그 응답에
+  `Cache-Control` 이 없어서 브라우저가 heuristic 으로 캐싱. 6h 가 metrics
+  페이지 기본 active 탭 (`metrics.html:48`) 이라 wrapper 재시작 윈도우에서
+  가장 자주 hit → 6h 만 stale HTML 이 캐시 박힘. 다른 탭은 클릭해야 fetch
+  되니 그 윈도우를 피해감.
+- **수정**:
+  - `wrapper/main.py` 에 middleware 추가 — `/api/*` 응답에
+    `Cache-Control: no-store` 박음. 페이지 (`/`, `/metrics`, `/static/`) 는
+    그대로.
+  - `nginx.ocr.conf` / `nginx.llm.conf` `/api/` location 에서
+    `proxy_intercept_errors on;` + `error_page` 줄 제거. 이제 wrapper 다운
+    중에는 nginx 기본 502 가 그대로 나오고 `fetch().json()` 이 깨끗하게 reject.
+    페이지 라우트는 친절 페이지 유지.
+- **배포**: 이미지 `honestjung/ocrwrapper:0.1.8` → `0.1.9`. nginx config +
+  compose 파일 `/srv/ocrserver/` 에 sync, nginx reload, wrapper recreate.
+- **사용자 즉시 우회 (사고 직후)**: Ctrl+F5 / DevTools "Disable cache" 로
+  stale 응답 강제 무효화. 사용자 측에서 확인 완료.
+
+## 이전 작업 (2026-05-26)
 
 오늘 세션은 사용자가 화요일 출근해서 "지난주 금요일 OCR 작업 돌려놓고
 갔는데 중간에 서버 문제 생긴 것 같다" 고 보고한 인시던트 진단 +
@@ -51,7 +77,7 @@ SERVICE     IMAGE                         STATUS
 chandra-a   honestjung/ocrserver:0.1.1    Up (healthy, GPU 0)
 chandra-b   honestjung/ocrserver:0.1.1    Up (healthy, GPU 1)
 nginx       nginx:alpine                  Up (nginx.ocr.conf)
-wrapper     honestjung/ocrwrapper:0.1.8   Up (OCR_CONCURRENCY=12)
+wrapper     honestjung/ocrwrapper:0.1.9   Up (OCR_CONCURRENCY=12)
 llm         vllm/vllm-openai:latest       Exited (0)   ← 의도대로
 ```
 
