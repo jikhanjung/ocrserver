@@ -37,13 +37,6 @@ _mode_switching = False
 
 _jobs: dict[str, dict] = {}
 _sem: asyncio.Semaphore
-# Cap concurrent _render_pdf calls. PyMuPDF mostly releases the GIL for
-# the heavy C code, but the per-page Python loop overhead is enough that
-# N parallel renders (one per in-flight job) starve the event loop —
-# lifespan resume hitting 12 jobs at once made the wrapper unresponsive
-# until the renders finished. 2 is a balance: keeps CPU saturated (chandra
-# is the real bottleneck) without starving HTTP.
-_render_sem: asyncio.Semaphore
 _db: aiosqlite.Connection
 _metrics_db: aiosqlite.Connection | None = None
 _metrics_db_lock = asyncio.Lock()
@@ -202,9 +195,8 @@ async def db_page_jobs(client_id: str | None, limit: int, offset: int) -> tuple[
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _sem, _render_sem, _db
+    global _sem, _db
     _sem = asyncio.Semaphore(CONCURRENCY)
-    _render_sem = asyncio.Semaphore(2)
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     os.makedirs(PDF_DIR, exist_ok=True)
     _db = await aiosqlite.connect(DB_PATH)
@@ -579,7 +571,11 @@ async def submit(
     if client_id is None:
         client_id = x_client_id
     pdf_bytes = await file.read()
-    file_hash = hashlib.sha256(pdf_bytes).hexdigest()
+    # Move sync CPU/IO out of the event loop — for a 500MB PDF the hash
+    # (~1-2s), the optional fitz parse (~1-2s), and the disk write (~2-5s)
+    # otherwise serialize the loop and freeze the dashboard during upload.
+    file_hash = await asyncio.to_thread(
+        lambda: hashlib.sha256(pdf_bytes).hexdigest())
 
     # Trust the client's page-count hint when provided so it can size its
     # in-flight queue from the first poll (PaperMeister sends this). When
@@ -587,17 +583,23 @@ async def submit(
     # value with what _render_pdf() actually sees, so a wrong hint self-
     # heals within seconds.
     if total_pages is None or total_pages <= 0:
-        try:
-            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-            total_pages = len(doc)
-            doc.close()
-        except Exception:
-            total_pages = 0
+        def _count_pages(b: bytes) -> int:
+            try:
+                doc = fitz.open(stream=b, filetype="pdf")
+                try:
+                    return len(doc)
+                finally:
+                    doc.close()
+            except Exception:
+                return 0
+        total_pages = await asyncio.to_thread(_count_pages, pdf_bytes)
 
     pdf_path = os.path.join(PDF_DIR, f"{file_hash}.pdf")
     if not os.path.exists(pdf_path):
-        with open(pdf_path, "wb") as f:
-            f.write(pdf_bytes)
+        def _write(path: str, data: bytes) -> None:
+            with open(path, "wb") as f:
+                f.write(data)
+        await asyncio.to_thread(_write, pdf_path, pdf_bytes)
 
     existing = (
         await db_find_existing_by_hash(file_hash, client_id) or
@@ -662,38 +664,44 @@ async def health():
 
 # ── Background processing ─────────────────────────────────────────────────────
 
-def _render_pdf(pdf_bytes: bytes, skip_pages: set[int]) -> tuple[int, list[tuple[int, str]]]:
-    """Synchronous PyMuPDF render + JPEG-encode loop. Run via asyncio.to_thread
-    so it doesn't block the event loop — for a 500-page PDF this loop spends
-    minutes in CPU-bound C code."""
+def _pdf_page_count(pdf_bytes: bytes) -> int:
+    """Open the PDF just long enough to read page count. Cheap (~ms even for
+    big PDFs) but still wrapped in to_thread when called so we don't pay even
+    that on the event loop."""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     try:
-        n = len(doc)
-        todo: list[tuple[int, str]] = []
-        for i in range(n):
-            if i in skip_pages:
-                continue
-            page = doc[i]
-            long_pt = max(page.rect.width, page.rect.height)
-            dpi = min(DPI, MAX_PAGE_PX * 72 / long_pt) if long_pt > 0 else DPI
-            zoom = dpi / 72
-            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-            todo.append((i, base64.b64encode(pix.tobytes("jpeg")).decode()))
-        return n, todo
+        return len(doc)
+    finally:
+        doc.close()
+
+
+def _render_one_page(pdf_bytes: bytes, page_num: int) -> str:
+    """Render a single page to base64-JPEG. Called from inside _ocr_page so
+    render concurrency naturally caps at the OCR semaphore (CONCURRENCY) —
+    no separate render burst, no need for a render-only semaphore."""
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        page = doc[page_num]
+        long_pt = max(page.rect.width, page.rect.height)
+        dpi = min(DPI, MAX_PAGE_PX * 72 / long_pt) if long_pt > 0 else DPI
+        zoom = dpi / 72
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+        return base64.b64encode(pix.tobytes("jpeg")).decode()
     finally:
         doc.close()
 
 
 async def _run(job_id: str, pdf_bytes: bytes, skip_pages: set[int] | None = None) -> None:
     """Process all pages of a PDF. If skip_pages is given, those page indices
-    are not re-rendered or re-submitted (used by lifespan resume)."""
+    are not re-submitted (used by lifespan resume). Rendering happens inside
+    each _ocr_page worker so it's paced by the OCR semaphore — the event loop
+    stays responsive even for 1000+ page books."""
     skip_pages = skip_pages or set()
     job = _jobs[job_id]
     try:
-        async with _render_sem:
-            n, todo = await asyncio.to_thread(_render_pdf, pdf_bytes, skip_pages)
+        n = await asyncio.to_thread(_pdf_page_count, pdf_bytes)
     except Exception as e:
-        msg = f"failed to render PDF: {e}"
+        msg = f"failed to open PDF: {e}"
         job.update(status="failed", error=msg)
         await db_update_job(job_id, status="failed", error=msg, completed_at=time.time())
         return
@@ -703,8 +711,9 @@ async def _run(job_id: str, pdf_bytes: bytes, skip_pages: set[int] | None = None
         job.update(total_pages=n, status="processing", pages=[None] * n)
         await db_update_job(job_id, status="processing", total_pages=n)
 
+    todo = [i for i in range(n) if i not in skip_pages]
     async with httpx.AsyncClient(timeout=3000) as client:
-        await asyncio.gather(*[_ocr_page(job, i, b64, client) for i, b64 in todo])
+        await asyncio.gather(*[_ocr_page(job, i, pdf_bytes, client) for i in todo])
 
     completed_at = time.time()
     status = "done" if job["failed_pages"] == 0 else "done_with_errors"
@@ -785,10 +794,22 @@ async def _resume_processing_jobs() -> None:
         print(f"[resume] re-spawned {len(rows)} 'processing' job(s)", flush=True)
 
 
-async def _ocr_page(job: dict, page_num: int, b64: str, client: httpx.AsyncClient) -> None:
+async def _ocr_page(job: dict, page_num: int, pdf_bytes: bytes,
+                    client: httpx.AsyncClient) -> None:
     async with _sem:
         t0 = time.time()
         last_error = ""
+        try:
+            b64 = await asyncio.to_thread(_render_one_page, pdf_bytes, page_num)
+        except Exception as e:
+            duration_ms = int((time.time() - t0) * 1000)
+            err = f"render failed: {e}"
+            job["pages"][page_num] = {"page": page_num, "error": err,
+                                       "duration_ms": duration_ms, "status": "failed"}
+            job["failed_pages"] += 1
+            await db_upsert_page(job["job_id"], page_num, "failed", duration_ms, error=err)
+            await db_update_job(job["job_id"], failed_pages=job["failed_pages"])
+            return
         for attempt, delay in enumerate([0] + _RETRY_DELAYS):
             if delay:
                 await asyncio.sleep(delay)

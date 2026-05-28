@@ -1,8 +1,30 @@
-# HANDOFF — 2026-05-28 (dedup 가 in-flight 도 매칭, wrapper 0.1.13)
+# HANDOFF — 2026-05-28 (per-page render in worker + POST async, wrapper 0.1.14)
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-05-28 저녁)
+## 방금 한 작업 (2026-05-28 밤)
+
+큰 PDF (Stewart 1773p) 제출 시 대시보드가 4분 이상 먹통이던 문제 해결.
+세부 `devlog/20260528_031_per_page_render_in_worker.md`.
+
+- **원인**: `_run()` 이 PDF 전체 페이지를 upfront 로 PyMuPDF render +
+  base64 list 에 쌓아두고 OCR 시작. 1773p = 단일 thread to_thread 에서 ~9분
+  GIL convoy → 이벤트 루프 starve.
+- **수정**: `_render_pdf` 제거, `_pdf_page_count` (페이지 수만) +
+  `_render_one_page` (단일 페이지) 로 분리. `_ocr_page` 가 자기 페이지를
+  `_sem` 슬롯 안에서 직접 render → chandra POST. render 동시성이 OCR
+  세마포어 (12) 와 자연 일치.
+- **왜 GIL convoy 안 일어나나**: chandra 25s/page, render 0.3s/page → 어느
+  순간이든 12 슬롯 중 0-1개만 render 중, 나머지는 chandra await. 동시 render
+  스레드 ≈ 1.
+- **부가 fix**: `_render_sem` 삭제 (불필요), POST 핸들러의 sha256 +
+  fitz.open + 디스크 write 도 `asyncio.to_thread` 화 (POST 동안에도 대시
+  보드 응답).
+- **배포**: `0.1.13` → `0.1.14`. Stewart 진행 중이었는데 lifespan resume
+  으로 45/1773 부터 이어 처리. 다운타임 중 chandra 응답 4개 잡혀서 49
+  로 올라옴.
+
+## 이전 작업 (2026-05-28 저녁)
 
 `db_find_done_by_hash` 가 `status='done'` 만 매칭해서, 같은 파일을 처리
 중인 동안 재제출하면 **중복 잡** 이 만들어지던 문제. 오늘 Stewart 가
@@ -140,7 +162,7 @@ SERVICE     IMAGE                         STATUS
 chandra-a   honestjung/ocrserver:0.1.1    Up (healthy, GPU 0)
 chandra-b   honestjung/ocrserver:0.1.1    Up (healthy, GPU 1)
 nginx       nginx:alpine                  Up (nginx.ocr.conf)
-wrapper     honestjung/ocrwrapper:0.1.13  Up (OCR_CONCURRENCY=12)
+wrapper     honestjung/ocrwrapper:0.1.14  Up (OCR_CONCURRENCY=12)
 llm         vllm/vllm-openai:latest       Exited (0)   ← 의도대로
 ```
 
