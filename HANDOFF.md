@@ -1,8 +1,33 @@
-# HANDOFF — 2026-05-27 (/api/ no-store + nginx error passthrough, wrapper 0.1.9)
+# HANDOFF — 2026-05-28 (PDF render in thread + nginx config inode gotcha, wrapper 0.1.10)
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-05-27)
+## 방금 한 작업 (2026-05-28)
+
+PaperMeister 가 60s 타임아웃으로 POST /ocr 이 5건 연속 실패한 인시던트
+진단 + 수정. 세부 `devlog/20260528_028_render_in_thread_event_loop_freeze.md`.
+
+- **원인**: `wrapper/main.py:_run()` 이 `async def` 인데 안에서 PDF 전체
+  페이지를 동기 루프로 래스터화 (`fitz.get_pixmap` + `tobytes("jpeg")` +
+  `base64.encode`). 220p + 518p 큰 잡 두 개가 같은 시간 접수되면서 200+초
+  동안 이벤트 루프 freeze → 그 윈도우에 들어온 POST 들이 응답 못 받음,
+  nginx 는 client (PaperMeister 60s timeout) 끊긴 후 **499** 로 기록.
+- **수정**: 헬퍼 `_render_pdf()` 로 sync 부분 분리, `asyncio.to_thread()`
+  로 호출. PyMuPDF C 코드는 GIL 풀어주므로 진짜 병렬 render 가능.
+- **부수 발견**: 어제 (devlog 027) 의 nginx 변경 (`/api/` 의 `error_page`
+  제거) 이 **실제 nginx 컨테이너에는 적용 안 돼 있었음**. Docker
+  single-file bind mount 는 컨테이너 시작 시점의 호스트 inode 를 잡고,
+  `cp` 로 호스트 파일 교체 시 새 inode 가 되면 컨테이너는 옛 파일을 계속
+  참조. `nginx -s reload` 로도 안 됨. `docker compose up -d --no-deps
+  --force-recreate nginx` 로 컨테이너 재기동해야 새 inode 잡힘.
+  → `mode-*.sh` 가 reload 로 끝나고 있는 것도 같은 버그에 취약. 별도 fix
+  필요 (아래 곧 해야 할 작업 #8).
+- **배포**: wrapper `0.1.9` → `0.1.10`, nginx 컨테이너 재기동, lifespan
+  resume 으로 in-flight 2 잡 (canadiannaturali 498p + Valent 9p) 이어
+  처리.
+- **검증**: 배포 후 throughput 30 ppm, /api/stats 5 trials 35-104ms 안정.
+
+## 이전 작업 (2026-05-27)
 
 `/metrics` 페이지의 **6h 탭만** 그래프가 안 나오는 버그 진단 + 수정.
 세부 `devlog/20260527_027_api_no_store_and_error_passthrough.md`.
@@ -77,7 +102,7 @@ SERVICE     IMAGE                         STATUS
 chandra-a   honestjung/ocrserver:0.1.1    Up (healthy, GPU 0)
 chandra-b   honestjung/ocrserver:0.1.1    Up (healthy, GPU 1)
 nginx       nginx:alpine                  Up (nginx.ocr.conf)
-wrapper     honestjung/ocrwrapper:0.1.9   Up (OCR_CONCURRENCY=12)
+wrapper     honestjung/ocrwrapper:0.1.10  Up (OCR_CONCURRENCY=12)
 llm         vllm/vllm-openai:latest       Exited (0)   ← 의도대로
 ```
 

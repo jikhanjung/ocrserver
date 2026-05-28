@@ -634,36 +634,45 @@ async def health():
 
 # ── Background processing ─────────────────────────────────────────────────────
 
+def _render_pdf(pdf_bytes: bytes, skip_pages: set[int]) -> tuple[int, list[tuple[int, str]]]:
+    """Synchronous PyMuPDF render + JPEG-encode loop. Run via asyncio.to_thread
+    so it doesn't block the event loop — for a 500-page PDF this loop spends
+    minutes in CPU-bound C code."""
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        n = len(doc)
+        todo: list[tuple[int, str]] = []
+        for i in range(n):
+            if i in skip_pages:
+                continue
+            page = doc[i]
+            long_pt = max(page.rect.width, page.rect.height)
+            dpi = min(DPI, MAX_PAGE_PX * 72 / long_pt) if long_pt > 0 else DPI
+            zoom = dpi / 72
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+            todo.append((i, base64.b64encode(pix.tobytes("jpeg")).decode()))
+        return n, todo
+    finally:
+        doc.close()
+
+
 async def _run(job_id: str, pdf_bytes: bytes, skip_pages: set[int] | None = None) -> None:
     """Process all pages of a PDF. If skip_pages is given, those page indices
     are not re-rendered or re-submitted (used by lifespan resume)."""
     skip_pages = skip_pages or set()
     job = _jobs[job_id]
     try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        n, todo = await asyncio.to_thread(_render_pdf, pdf_bytes, skip_pages)
     except Exception as e:
-        msg = f"failed to open PDF: {e}"
+        msg = f"failed to render PDF: {e}"
         job.update(status="failed", error=msg)
         await db_update_job(job_id, status="failed", error=msg, completed_at=time.time())
         return
 
-    n = len(doc)
     if not skip_pages:
         # fresh job: initialize page array & total_pages in DB
         job.update(total_pages=n, status="processing", pages=[None] * n)
         await db_update_job(job_id, status="processing", total_pages=n)
-
-    todo: list[tuple[int, str]] = []
-    for i in range(n):
-        if i in skip_pages:
-            continue
-        page = doc[i]
-        long_pt = max(page.rect.width, page.rect.height)
-        dpi = min(DPI, MAX_PAGE_PX * 72 / long_pt) if long_pt > 0 else DPI
-        zoom = dpi / 72
-        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-        todo.append((i, base64.b64encode(pix.tobytes("jpeg")).decode()))
-    doc.close()
 
     async with httpx.AsyncClient(timeout=3000) as client:
         await asyncio.gather(*[_ocr_page(job, i, b64, client) for i, b64 in todo])
