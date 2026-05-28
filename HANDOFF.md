@@ -1,8 +1,32 @@
-# HANDOFF — 2026-05-28 (PDF render in thread + nginx config inode gotcha, wrapper 0.1.10)
+# HANDOFF — 2026-05-28 (total_pages hint + render_sem + 12-job 인시던트 복구, wrapper 0.1.12)
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-05-28)
+## 방금 한 작업 (2026-05-28 오후)
+
+PaperMeister client 가 큐 깊이 과소계상 (큰 책을 1페이지로 카운트) 으로
+12개 큰 PDF 를 동시 제출 → 서버 wrapper recreate 시 lifespan resume 가
+12개 모두 동시 render → GIL convoy → wrapper unresponsive 인시던트.
+세부 `devlog/20260528_029_total_pages_hint_and_render_sem.md`.
+
+- **변경 (a)**: POST `/ocr` 에 `total_pages: int | None = Form(None)` hint
+  파라미터 추가. 주어지면 sync 파싱 스킵, `_jobs`/`db` 에 초기값으로 박음.
+  `_run()` 이 `_render_pdf` 결과로 어차피 덮어쓰니까 거짓 hint 자동 보정.
+  응답에도 `total_pages` 포함 (클라이언트 첫 poll 불필요).
+- **변경 (b, 긴급 추가)**: `_render_sem = asyncio.Semaphore(2)` 도입.
+  `_run()` 의 `await asyncio.to_thread(_render_pdf, ...)` 를 감쌈. PyMuPDF
+  를 N 스레드 동시 호출 시 GIL convoy 로 이벤트 루프 starve 됨 — 12잡 동시
+  resume 이 직접 hang 일으킴. semaphore=2 로 막아도 12잡 동시 resume 자체는
+  trigger 가능, 후속 작업 필요 (per-page render).
+- **데이터 복구**: Stewart Antarctica (1343/1773 done) 만 'processing'
+  유지, 나머지 11잡 (모두 0/N) DB 에서 'failed' 마킹. host python 은
+  root-owned DB write 불가 → 1회용 컨테이너로 SQL UPDATE.
+- **배포**: `0.1.10` → `0.1.11` (hint) → `0.1.12` (render_sem 긴급 추가).
+- **PaperMeister 쪽 fix**: 별도 (다른 리포). `wrapper_submit()` 이 로컬에서
+  PyMuPDF 로 페이지 수 미리 계산해서 큐 깊이 계산에 사용 + 서버에 hint
+  로 전송. 12잡 동시 제출 재발 방지.
+
+## 이전 작업 (2026-05-28 오전)
 
 PaperMeister 가 60s 타임아웃으로 POST /ocr 이 5건 연속 실패한 인시던트
 진단 + 수정. 세부 `devlog/20260528_028_render_in_thread_event_loop_freeze.md`.
@@ -102,7 +126,7 @@ SERVICE     IMAGE                         STATUS
 chandra-a   honestjung/ocrserver:0.1.1    Up (healthy, GPU 0)
 chandra-b   honestjung/ocrserver:0.1.1    Up (healthy, GPU 1)
 nginx       nginx:alpine                  Up (nginx.ocr.conf)
-wrapper     honestjung/ocrwrapper:0.1.10  Up (OCR_CONCURRENCY=12)
+wrapper     honestjung/ocrwrapper:0.1.12  Up (OCR_CONCURRENCY=12)
 llm         vllm/vllm-openai:latest       Exited (0)   ← 의도대로
 ```
 
