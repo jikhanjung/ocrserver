@@ -187,32 +187,9 @@ llm         vllm/vllm-openai:latest       Exited (0)   ← 의도대로
 
 ## 곧 해야 할 작업
 
-우선순위 순. devlog 026 의 "곧 해야 할 작업" 에서 watchdog (#1) 만 빠짐.
-
-1. **nvidia-* unattended-upgrades 블랙리스트** (이전 HANDOFF 에서 이월).
-   024 의 NVML mismatch 인시던트 + 이번 freeze 가 둘 다 NVIDIA 드라이버
-   계열과 연관 가능성 있음. `/etc/apt/apt.conf.d/50unattended-upgrades`
-   의 `Package-Blacklist` 에 `nvidia-*` 추가. 메모리:
-   `project_unattended_upgrades_docker.md`.
-2. **부팅 알림 hook** — boot 0 직후 어딘가 (Slack/이메일) 로 ping. watchdog
-   이 자동 재부팅한 경우 즉시 인지. systemd `multi-user.target` 의 oneshot
-   이면 충분.
-3. **`metrics_collector` 확장** — CPU 온도/throttle, GPU power draw, ECC
-   카운터, PCIe link state. 다음 freeze 의 진단 단서 강화. metrics.db 의
-   스키마 변경 + 그래프 측 컬럼 추가.
-4. **page duration p95 알림** — 분 단위 p95 가 평소의 3배 초과 시 webhook.
-   이번 인시던트의 선행 신호 패턴을 실시간 감지.
-5. **NVIDIA 드라이버 변경 검토** — Open Kernel Module 595.71 →
-   proprietary. Turing (RTX 8000) 은 proprietary 가 더 안정적이라는 보고.
-   다만 트리거 확정 못한 상태에서 큰 변경은 risk. 후순위.
-6. **/api/metrics gap visualization** — 호스트 다운 시 `pages_per_step` 도
-   gap 으로 표시. `wrapper/main.py:285-289` 의 default fill 정책 수정.
-   미니 작업.
-7. **냉장고 별도 확인** — 같은 콘센트군이라는데 다른 두 PC 멀쩡한 게
-   모순. 우연일 가능성 ↑ but 직접 확인 권장.
-8. **GPU power limit 230W 자동 재적용 검증** — 025 에서 설치한
-   `ocrserver-gpu-power-limit.service` 가 이번 reboot 에 정상 작동했는지
-   `nvidia-smi -q -d POWER | grep "Power Limit"` 로 확인.
+백로그는 [TODOs.md](TODOs.md) 로 이동. 우선순위 + 분류 + 오늘 새로 늘어난
+항목 (mode 스크립트의 nginx reload, lifespan resume sync read, 잡 fair
+스케줄링, fitz.open 중복) 포함.
 
 ## 참고 위치
 
