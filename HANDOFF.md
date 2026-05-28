@@ -1,8 +1,22 @@
-# HANDOFF — 2026-05-28 (total_pages hint + render_sem + 12-job 인시던트 복구, wrapper 0.1.12)
+# HANDOFF — 2026-05-28 (dedup 가 in-flight 도 매칭, wrapper 0.1.13)
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-05-28 오후)
+## 방금 한 작업 (2026-05-28 저녁)
+
+`db_find_done_by_hash` 가 `status='done'` 만 매칭해서, 같은 파일을 처리
+중인 동안 재제출하면 **중복 잡** 이 만들어지던 문제. 오늘 Stewart 가
+processing 중일 때 PaperMeister 가 재제출 → 두 번째 Stewart 잡이 생겨서
+서버 hang 트리거된 사건의 latent 원인.
+
+- 함수 rename: `db_find_done_by_hash` → `db_find_existing_by_hash`
+- SQL: `status IN ('done','processing','queued')`, ORDER `(status='done') DESC, submitted_at DESC` (done 우선)
+- 응답에 `in_progress: bool` 필드 추가 — 클라이언트가 "그냥 polling 하자" 결정 가능
+- failed 잡은 여전히 dedup 안 됨 (재시도 가능 유지)
+- client_id scoping 그대로 (다른 client 끼리는 dedup 안 일어남)
+- 배포: `0.1.12` → `0.1.13`. 신규 잡 0건 상태에서 무손실 재기동.
+
+## 이전 작업 (2026-05-28 오후)
 
 PaperMeister client 가 큐 깊이 과소계상 (큰 책을 1페이지로 카운트) 으로
 12개 큰 PDF 를 동시 제출 → 서버 wrapper recreate 시 lifespan resume 가
@@ -126,7 +140,7 @@ SERVICE     IMAGE                         STATUS
 chandra-a   honestjung/ocrserver:0.1.1    Up (healthy, GPU 0)
 chandra-b   honestjung/ocrserver:0.1.1    Up (healthy, GPU 1)
 nginx       nginx:alpine                  Up (nginx.ocr.conf)
-wrapper     honestjung/ocrwrapper:0.1.12  Up (OCR_CONCURRENCY=12)
+wrapper     honestjung/ocrwrapper:0.1.13  Up (OCR_CONCURRENCY=12)
 llm         vllm/vllm-openai:latest       Exited (0)   ← 의도대로
 ```
 

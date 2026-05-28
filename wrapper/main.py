@@ -93,10 +93,16 @@ async def db_init() -> None:
     await _db.commit()
 
 
-async def db_find_done_by_hash(file_hash: str, client_id: str | None) -> dict | None:
+async def db_find_existing_by_hash(file_hash: str, client_id: str | None) -> dict | None:
+    """Dedup hit for resubmission of the same file by the same client. Matches
+    in-flight (queued/processing) as well as done — a client that lost its
+    job_id (restart, page reload) shouldn't create a parallel duplicate of an
+    already-running long job. Failed jobs are intentionally NOT matched so
+    the client can retry. Done-jobs win when both exist."""
     async with _db.execute(
-        "SELECT job_id FROM jobs WHERE file_hash=? AND client_id IS ? AND status='done' "
-        "ORDER BY completed_at DESC LIMIT 1",
+        "SELECT job_id FROM jobs WHERE file_hash=? AND client_id IS ? "
+        "AND status IN ('done','processing','queued') "
+        "ORDER BY (status='done') DESC, submitted_at DESC LIMIT 1",
         (file_hash, client_id),
     ) as c:
         row = await c.fetchone()
@@ -594,11 +600,16 @@ async def submit(
             f.write(pdf_bytes)
 
     existing = (
-        await db_find_done_by_hash(file_hash, client_id) or
+        await db_find_existing_by_hash(file_hash, client_id) or
         await db_find_done_by_filename(file.filename, total_pages, file_hash, client_id)
     )
     if existing:
-        return {"job_id": existing["job_id"], "cached": True, "total_pages": existing.get("total_pages", 0)}
+        return {
+            "job_id": existing["job_id"],
+            "cached": True,
+            "in_progress": existing.get("status") != "done",
+            "total_pages": existing.get("total_pages", 0),
+        }
 
     job_id = str(uuid.uuid4())
     now = time.time()
