@@ -157,6 +157,37 @@
           <div class="text-muted small text-truncate" id="llmUrl">—</div>
         </div>
       </div>
+
+      <!-- 24h traffic stats (visible only when llmwrapper is logging) -->
+      <div id="llmStatsRow" class="mt-3 pt-3 border-top" style="display:none">
+        <div class="metric-label mb-2">최근 24시간 트래픽 <span class="text-muted small fw-normal">(llmwrapper 기록 기준)</span></div>
+        <div class="row g-3">
+          <div class="col-sm-3">
+            <div class="metric-label">요청 수</div>
+            <div class="metric-value fs-5"><span id="llm24Total">—</span>
+              <span class="text-muted fs-6 fw-normal" id="llm24Err"></span>
+            </div>
+          </div>
+          <div class="col-sm-3">
+            <div class="metric-label">프롬프트 토큰</div>
+            <div class="metric-value fs-5" id="llm24PromptTok">—</div>
+          </div>
+          <div class="col-sm-3">
+            <div class="metric-label">생성 토큰</div>
+            <div class="metric-value fs-5" id="llm24ComplTok">—</div>
+          </div>
+          <div class="col-sm-3">
+            <div class="metric-label">평균 응답시간</div>
+            <div class="metric-value fs-5" id="llm24Latency">—</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recent requests -->
+      <div id="llmRecentRow" class="mt-3 pt-3 border-top" style="display:none">
+        <div class="metric-label mb-2">최근 요청 <span class="text-muted small fw-normal">(최대 10건)</span></div>
+        <div id="llmRecentList" class="small"></div>
+      </div>
     </div>
   </div>
 
@@ -330,6 +361,7 @@ async function refresh() {
       document.getElementById('llmHttp').textContent = llm.http_status ?? '—';
       document.getElementById('llmUrl').textContent = svc._meta?.llm_url ?? '—';
       document.getElementById('llmUrl').title = svc._meta?.llm_url ?? '';
+      refreshLlmTraffic();
     } else {
       llmCard.classList.add('muted');
       llmHint.textContent = '현재 LLM 컨테이너가 떠 있지 않습니다. mode-llm.sh 또는 mode-llm+ocr.sh 로 전환하면 활성화됩니다.';
@@ -337,6 +369,8 @@ async function refresh() {
       document.getElementById('llmHttp').textContent = '—';
       document.getElementById('llmUrl').textContent = '— (라우팅 없음)';
       document.getElementById('llmUrl').title = '';
+      document.getElementById('llmStatsRow').style.display = 'none';
+      document.getElementById('llmRecentRow').style.display = 'none';
     }
 
     // Quick test buttons re-render only if mode changed
@@ -349,6 +383,83 @@ async function refresh() {
       '마지막 확인: ' + new Date().toLocaleTimeString('ko-KR');
   } catch(e) {
     document.getElementById('lastChecked').textContent = '데이터 로드 실패: ' + e.message;
+  }
+}
+
+function fmtNum(n) {
+  if (n == null) return '—';
+  if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'k';
+  return String(n);
+}
+
+function fmtLatency(ms) {
+  if (!ms) return '—';
+  if (ms < 1000) return ms + 'ms';
+  return (ms/1000).toFixed(1) + 's';
+}
+
+function shortTime(epochSec) {
+  if (!epochSec) return '—';
+  const d = new Date(epochSec * 1000);
+  return d.toLocaleTimeString('ko-KR', { hour12: false });
+}
+
+async function refreshLlmTraffic() {
+  try {
+    const [stats, recent] = await Promise.all([
+      fetch('/api/llm/stats?range=24h').then(r => r.json()),
+      fetch('/api/llm/recent?limit=10').then(r => r.json()),
+    ]);
+    const statsRow  = document.getElementById('llmStatsRow');
+    const recentRow = document.getElementById('llmRecentRow');
+    if (!stats.available) {
+      // llmwrapper hasn't started yet — hide the rows entirely.
+      statsRow.style.display = 'none';
+      recentRow.style.display = 'none';
+      return;
+    }
+    statsRow.style.display = '';
+    recentRow.style.display = '';
+
+    const c = stats.counts || {};
+    const t = stats.tokens || {};
+    document.getElementById('llm24Total').textContent = fmtNum(c.total);
+    const errN = c.error || 0;
+    document.getElementById('llm24Err').textContent =
+      errN ? ` (오류 ${errN})` : '';
+    document.getElementById('llm24PromptTok').textContent = fmtNum(t.prompt);
+    document.getElementById('llm24ComplTok').textContent  = fmtNum(t.completion);
+    document.getElementById('llm24Latency').textContent   = fmtLatency(stats.avg_latency_ms);
+
+    const list = document.getElementById('llmRecentList');
+    const items = recent.items || [];
+    if (!items.length) {
+      list.innerHTML = '<span class="text-muted">기록 없음</span>';
+      return;
+    }
+    list.innerHTML = items.map(it => {
+      const cls =
+        it.status === 'ok' ? 'text-success' :
+        it.status === 'client_abort' ? 'text-muted' : 'text-danger';
+      const tok = it.total_tokens ? `${it.total_tokens} tok` : '— tok';
+      const stream = it.streamed ? '<span class="badge bg-light text-muted border ms-1">stream</span>' : '';
+      return `<div class="d-flex justify-content-between border-bottom py-1">
+        <div>
+          <span class="text-muted me-2">${shortTime(it.submitted_at)}</span>
+          <code class="text-dark">${it.model || '—'}</code>
+          ${stream}
+        </div>
+        <div>
+          <span class="me-2">${tok}</span>
+          <span class="me-2">${fmtLatency(it.latency_ms)}</span>
+          <span class="${cls}">${it.status || '?'}</span>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    document.getElementById('llmStatsRow').style.display = 'none';
+    document.getElementById('llmRecentRow').style.display = 'none';
   }
 }
 

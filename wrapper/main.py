@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import hashlib
+import json
 import os
 import time
 import uuid
@@ -10,15 +11,23 @@ import aiosqlite
 import fitz
 import httpx
 import yaml
-from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+
+# Role selects which side of the wrapper is active. Same image, two containers:
+#   ocr  → dashboard, OCR job API, OCR worker, resume on startup. LLM DB read-only for /api/llm/*.
+#   llm  → /v1/* proxy to vLLM with request/response logging. No OCR side at all.
+WRAPPER_ROLE = os.getenv("WRAPPER_ROLE", "ocr")
 
 DB_PATH = os.getenv("DB_PATH", "/data/ocrserver.db")
 METRICS_DB_PATH = os.getenv("METRICS_DB_PATH", "/data/metrics.db")
+LLM_DB_PATH = os.getenv("LLM_DB_PATH", "/data/llmserver.db")
 PDF_DIR = os.getenv("PDF_DIR", "/data/pdfs")
 VLLM_URL = os.getenv("VLLM_URL", "http://nginx:80")
 VLLM_MODEL = os.getenv("VLLM_MODEL", "chandra")
+LLM_UPSTREAM = os.getenv("LLM_UPSTREAM", "http://llm:8000")  # vLLM Qwen3-14B, role=llm only
+LLM_LOG_MAX_BYTES = int(os.getenv("LLM_LOG_MAX_BYTES", "65536"))  # truncate request/response text on insert
 CONCURRENCY = int(os.getenv("OCR_CONCURRENCY", "12"))
 DPI = int(os.getenv("OCR_DPI", "150"))
 MAX_PAGE_PX = int(os.getenv("OCR_MAX_PAGE_PX", "2200"))  # cap longest side; chandra-ocr-2 max_model_len=12384
@@ -37,9 +46,11 @@ _mode_switching = False
 
 _jobs: dict[str, dict] = {}
 _sem: asyncio.Semaphore
-_db: aiosqlite.Connection
+_db: aiosqlite.Connection | None = None  # OCR DB (role=ocr only)
 _metrics_db: aiosqlite.Connection | None = None
 _metrics_db_lock = asyncio.Lock()
+_llm_db: aiosqlite.Connection | None = None      # LLM DB RW (role=llm)
+_llm_db_ro: aiosqlite.Connection | None = None   # LLM DB RO (role=ocr, for /api/llm/* read)
 _start_time = time.time()
 
 
@@ -191,11 +202,132 @@ async def db_page_jobs(client_id: str | None, limit: int, offset: int) -> tuple[
     return [dict(r) for r in rows], total
 
 
+# ── LLM DB helpers ────────────────────────────────────────────────────────────
+# llmserver.db is written by the WRAPPER_ROLE=llm container and read RO by the
+# WRAPPER_ROLE=ocr container (so the dashboard can show recent LLM activity).
+
+async def db_llm_init() -> None:
+    # WAL + busy_timeout so a concurrent RO reader (the ocr wrapper) doesn't
+    # ever block our writes. We're the sole writer, so contention should be ~0.
+    await _llm_db.execute("PRAGMA journal_mode=WAL")
+    await _llm_db.execute("PRAGMA busy_timeout=5000")
+    await _llm_db.executescript("""
+        CREATE TABLE IF NOT EXISTS llm_requests (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            submitted_at      REAL,
+            completed_at      REAL,
+            model             TEXT,
+            endpoint          TEXT,
+            client_ip         TEXT,
+            request_json      TEXT,
+            response_text     TEXT,
+            prompt_tokens     INTEGER,
+            completion_tokens INTEGER,
+            total_tokens      INTEGER,
+            latency_ms        INTEGER,
+            http_status       INTEGER,
+            status            TEXT,
+            error             TEXT,
+            streamed          INTEGER DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_llm_submitted ON llm_requests(submitted_at);
+    """)
+    await _llm_db.commit()
+
+
+def _truncate(s: str | None, limit: int = LLM_LOG_MAX_BYTES) -> str | None:
+    if s is None:
+        return None
+    if len(s) <= limit:
+        return s
+    return s[:limit] + f"\n…[truncated {len(s) - limit} bytes]"
+
+
+async def db_llm_insert(
+    *,
+    submitted_at: float, completed_at: float,
+    model: str | None, endpoint: str, client_ip: str,
+    request_json: str, response_text: str,
+    prompt_tokens: int | None, completion_tokens: int | None, total_tokens: int | None,
+    latency_ms: int, http_status: int, status: str,
+    error: str | None, streamed: int,
+) -> None:
+    await _llm_db.execute(
+        "INSERT INTO llm_requests "
+        "(submitted_at, completed_at, model, endpoint, client_ip, request_json, response_text, "
+        " prompt_tokens, completion_tokens, total_tokens, latency_ms, http_status, status, error, streamed) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (submitted_at, completed_at, model, endpoint, client_ip,
+         _truncate(request_json), _truncate(response_text),
+         prompt_tokens, completion_tokens, total_tokens,
+         latency_ms, http_status, status, error, streamed),
+    )
+    await _llm_db.commit()
+
+
+async def _get_llm_db_ro() -> aiosqlite.Connection | None:
+    """Lazy RO open of llmserver.db. ocrwrapper may start before llmwrapper
+    has created the file, and we don't want that race to leave /api/llm/*
+    permanently empty."""
+    global _llm_db_ro
+    if _llm_db_ro is not None:
+        return _llm_db_ro
+    if not os.path.exists(LLM_DB_PATH):
+        return None
+    try:
+        _llm_db_ro = await aiosqlite.connect(
+            f"file:{LLM_DB_PATH}?mode=ro", uri=True
+        )
+        _llm_db_ro.row_factory = aiosqlite.Row
+    except Exception as e:
+        print(f"[llm-db-ro] open failed: {e}", flush=True)
+        return None
+    return _llm_db_ro
+
+
+async def db_llm_recent(conn: aiosqlite.Connection, limit: int) -> list[dict]:
+    async with conn.execute(
+        "SELECT id, submitted_at, completed_at, model, endpoint, "
+        "prompt_tokens, completion_tokens, total_tokens, latency_ms, "
+        "http_status, status, error, streamed "
+        "FROM llm_requests ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ) as c:
+        rows = await c.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def db_llm_stats(conn: aiosqlite.Connection, since: float) -> dict:
+    async with conn.execute(
+        "SELECT COUNT(*) AS n, "
+        "SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END) AS ok_n, "
+        "SUM(CASE WHEN status NOT IN ('ok','client_abort') THEN 1 ELSE 0 END) AS err_n, "
+        "SUM(prompt_tokens) AS pt, SUM(completion_tokens) AS ct, SUM(total_tokens) AS tt, "
+        "AVG(latency_ms) AS avg_latency_ms "
+        "FROM llm_requests WHERE submitted_at >= ?",
+        (since,),
+    ) as c:
+        row = await c.fetchone()
+    return dict(row) if row else {}
+
+
 # ── App lifecycle ─────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _sem, _db
+    global _sem, _db, _llm_db, _llm_db_ro
+    if WRAPPER_ROLE == "llm":
+        # LLM proxy mode: only need llmserver.db RW. No OCR worker, no resume.
+        os.makedirs(os.path.dirname(LLM_DB_PATH), exist_ok=True)
+        _llm_db = await aiosqlite.connect(LLM_DB_PATH)
+        _llm_db.row_factory = aiosqlite.Row
+        await db_llm_init()
+        print(f"[lifespan] role=llm, llm_db={LLM_DB_PATH}, upstream={LLM_UPSTREAM}", flush=True)
+        yield
+        await _llm_db.close()
+        return
+
+    # OCR mode (default): full OCR pipeline + read-only LLM DB for dashboard.
     _sem = asyncio.Semaphore(CONCURRENCY)
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     os.makedirs(PDF_DIR, exist_ok=True)
@@ -203,10 +335,23 @@ async def lifespan(app: FastAPI):
     _db.row_factory = aiosqlite.Row
     await db_init()
     await _resume_processing_jobs()
+    # Best-effort RO open of llmserver.db. Missing file just means the llm
+    # wrapper hasn't run yet — /api/llm/* will report empty stats.
+    if os.path.exists(LLM_DB_PATH):
+        try:
+            _llm_db_ro = await aiosqlite.connect(
+                f"file:{LLM_DB_PATH}?mode=ro", uri=True
+            )
+            _llm_db_ro.row_factory = aiosqlite.Row
+        except Exception as e:
+            print(f"[lifespan] llm_db RO open failed: {e}", flush=True)
+            _llm_db_ro = None
     yield
     await _db.close()
     if _metrics_db is not None:
         await _metrics_db.close()
+    if _llm_db_ro is not None:
+        await _llm_db_ro.close()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -564,6 +709,7 @@ async def submit(
     file: UploadFile = File(...),
     client_id: str | None = Form(None),
     total_pages: int | None = Form(None),
+    force: bool = Form(False),
     x_client_id: str | None = Header(None),
 ):
     if _mode_switching:
@@ -601,7 +747,11 @@ async def submit(
                 f.write(data)
         await asyncio.to_thread(_write, pdf_path, pdf_bytes)
 
-    existing = (
+    # force=true: skip dedup completely and re-OCR the file under a fresh
+    # job_id. Use case: a previous result has blank/whitespace-only pages
+    # that the client wants regenerated. Keeps the old job row (and its
+    # markdown) untouched — newer job wins subsequent dedup lookups.
+    existing = None if force else (
         await db_find_existing_by_hash(file_hash, client_id) or
         await db_find_done_by_filename(file.filename, total_pages, file_hash, client_id)
     )
@@ -631,7 +781,7 @@ async def submit(
     if total_pages:
         await db_update_job(job_id, total_pages=total_pages)
     background_tasks.add_task(_run, job_id, pdf_bytes)
-    return {"job_id": job_id, "cached": False, "total_pages": total_pages}
+    return {"job_id": job_id, "cached": False, "forced": force, "total_pages": total_pages}
 
 
 @app.get("/ocr")
@@ -660,6 +810,233 @@ async def get_job(job_id: str):
 @app.get("/health")
 async def health():
     return {}
+
+
+# ── LLM read API (role=ocr, reads llmserver.db RO) ────────────────────────────
+
+if WRAPPER_ROLE == "ocr":
+
+    @app.get("/api/llm/recent")
+    async def api_llm_recent(limit: int = Query(20, ge=1, le=200)):
+        conn = await _get_llm_db_ro()
+        if conn is None:
+            return {"items": [], "available": False}
+        items = await db_llm_recent(conn, limit)
+        return {"items": items, "available": True}
+
+    @app.get("/api/llm/stats")
+    async def api_llm_stats(range_: str = Query("24h", alias="range")):
+        conn = await _get_llm_db_ro()
+        if conn is None:
+            return {"available": False, "range": range_, "counts": {}, "tokens": {}}
+        span = _RANGE_MAP.get(range_, 86400)
+        since = time.time() - span
+        s = await db_llm_stats(conn, since)
+        n = s.get("n") or 0
+        ok_n = s.get("ok_n") or 0
+        err_n = s.get("err_n") or 0
+        return {
+            "available": True,
+            "range": range_,
+            "since": since,
+            "counts": {
+                "total": n,
+                "ok": ok_n,
+                "error": err_n,
+                "error_rate": (err_n / n) if n else 0.0,
+            },
+            "tokens": {
+                "prompt": s.get("pt") or 0,
+                "completion": s.get("ct") or 0,
+                "total": s.get("tt") or 0,
+            },
+            "avg_latency_ms": int(s.get("avg_latency_ms") or 0),
+        }
+
+
+# ── LLM proxy (role=llm) ──────────────────────────────────────────────────────
+# Forwards /v1/* to LLM_UPSTREAM and logs each request to llm_requests. SSE
+# streams are passed through line-by-line while content/usage is accumulated
+# in the background for the final DB row.
+
+def _extract_completion_text(resp_json: dict) -> str:
+    """Best-effort: chat/completions → choices[0].message.content,
+    legacy completions → choices[0].text, else empty."""
+    choices = resp_json.get("choices") or []
+    if not choices:
+        return ""
+    c0 = choices[0]
+    msg = c0.get("message") or {}
+    if isinstance(msg.get("content"), str):
+        return msg["content"]
+    if isinstance(c0.get("text"), str):
+        return c0["text"]
+    return ""
+
+
+def _log_llm_safe(coro_kwargs: dict) -> None:
+    """Schedule a DB insert without awaiting — used from streaming generators
+    where awaiting in a finally-block during client-disconnect can race with
+    the event loop shutdown path."""
+    async def _go():
+        try:
+            await db_llm_insert(**coro_kwargs)
+        except Exception as e:
+            print(f"[llm-log] insert failed: {e}", flush=True)
+    asyncio.create_task(_go())
+
+
+if WRAPPER_ROLE == "llm":
+
+    @app.api_route("/v1/{path:path}", methods=["GET", "POST"])
+    async def llm_proxy(path: str, request: Request):
+        upstream_url = f"{LLM_UPSTREAM.rstrip('/')}/v1/{path}"
+        endpoint = f"/v1/{path}"
+        client_ip = request.client.host if request.client else ""
+        method = request.method
+
+        # GET (e.g. /v1/models): simple passthrough, not logged.
+        if method == "GET":
+            async with httpx.AsyncClient(timeout=30) as client:
+                try:
+                    r = await client.get(upstream_url, params=request.query_params)
+                except Exception as e:
+                    raise HTTPException(status_code=502, detail=f"upstream: {e}")
+            return Response(
+                content=r.content, status_code=r.status_code,
+                media_type=r.headers.get("Content-Type", "application/json"),
+            )
+
+        # POST: read body, decide streaming, forward.
+        body = await request.body()
+        try:
+            req_obj = json.loads(body) if body else {}
+        except Exception:
+            req_obj = {}
+        model = req_obj.get("model") if isinstance(req_obj, dict) else None
+        stream = bool(isinstance(req_obj, dict) and req_obj.get("stream"))
+
+        # Ask vLLM to include token usage in the final streamed chunk so we
+        # can record prompt/completion_tokens even for streamed responses.
+        if stream and isinstance(req_obj, dict) and "stream_options" not in req_obj:
+            req_obj["stream_options"] = {"include_usage": True}
+            body = json.dumps(req_obj).encode()
+
+        submitted_at = time.time()
+        req_text = body.decode("utf-8", errors="replace")
+        upstream_headers = {"Content-Type": "application/json"}
+
+        if not stream:
+            async with httpx.AsyncClient(timeout=600) as client:
+                try:
+                    r = await client.post(upstream_url, content=body, headers=upstream_headers)
+                except Exception as e:
+                    await db_llm_insert(
+                        submitted_at=submitted_at, completed_at=time.time(),
+                        model=model, endpoint=endpoint, client_ip=client_ip,
+                        request_json=req_text, response_text="",
+                        prompt_tokens=None, completion_tokens=None, total_tokens=None,
+                        latency_ms=int((time.time() - submitted_at) * 1000),
+                        http_status=0, status="error", error=str(e), streamed=0,
+                    )
+                    raise HTTPException(status_code=502, detail=f"upstream: {e}")
+            latency_ms = int((time.time() - submitted_at) * 1000)
+            usage: dict = {}
+            content = ""
+            try:
+                resp_json = r.json()
+                if isinstance(resp_json, dict):
+                    usage = resp_json.get("usage") or {}
+                    content = _extract_completion_text(resp_json)
+            except Exception:
+                content = r.text
+            await db_llm_insert(
+                submitted_at=submitted_at, completed_at=time.time(),
+                model=model, endpoint=endpoint, client_ip=client_ip,
+                request_json=req_text, response_text=content,
+                prompt_tokens=usage.get("prompt_tokens"),
+                completion_tokens=usage.get("completion_tokens"),
+                total_tokens=usage.get("total_tokens"),
+                latency_ms=latency_ms, http_status=r.status_code,
+                status="ok" if r.is_success else "error",
+                error=None if r.is_success else r.text[:500],
+                streamed=0,
+            )
+            return Response(
+                content=r.content, status_code=r.status_code,
+                media_type=r.headers.get("Content-Type", "application/json"),
+            )
+
+        # Streaming: tee SSE lines downstream while accumulating content + usage.
+        async def gen():
+            accumulated: list[str] = []
+            usage: dict = {}
+            upstream_status = 0
+            error_msg: str | None = None
+            ended_normally = False
+            try:
+                async with httpx.AsyncClient(timeout=None) as client:
+                    async with client.stream(
+                        "POST", upstream_url, content=body, headers=upstream_headers
+                    ) as r:
+                        upstream_status = r.status_code
+                        if not r.is_success:
+                            chunk = await r.aread()
+                            yield chunk
+                            return
+                        async for line in r.aiter_lines():
+                            # SSE: "data: {...}" lines separated by blank lines.
+                            # aiter_lines() strips the trailing \n, so we add
+                            # back \n + the SSE blank-line separator.
+                            yield (line + "\n").encode()
+                            if line.startswith("data: "):
+                                payload = line[6:]
+                                if payload.strip() == "[DONE]":
+                                    continue
+                                try:
+                                    obj = json.loads(payload)
+                                except Exception:
+                                    continue
+                                if isinstance(obj, dict):
+                                    if obj.get("usage"):
+                                        usage = obj["usage"]
+                                    for choice in obj.get("choices") or []:
+                                        delta = choice.get("delta") or {}
+                                        if isinstance(delta.get("content"), str):
+                                            accumulated.append(delta["content"])
+                                        elif isinstance(choice.get("text"), str):
+                                            accumulated.append(choice["text"])
+                ended_normally = True
+            except (asyncio.CancelledError, GeneratorExit):
+                error_msg = "client_abort"
+                raise
+            except Exception as e:
+                error_msg = f"{type(e).__name__}: {e}"
+            finally:
+                if error_msg == "client_abort":
+                    status = "client_abort"
+                elif error_msg:
+                    status = "error"
+                elif upstream_status and upstream_status >= 400:
+                    status = "error"
+                elif ended_normally:
+                    status = "ok"
+                else:
+                    status = "error"
+                _log_llm_safe(dict(
+                    submitted_at=submitted_at, completed_at=time.time(),
+                    model=model, endpoint=endpoint, client_ip=client_ip,
+                    request_json=req_text,
+                    response_text="".join(accumulated),
+                    prompt_tokens=usage.get("prompt_tokens"),
+                    completion_tokens=usage.get("completion_tokens"),
+                    total_tokens=usage.get("total_tokens"),
+                    latency_ms=int((time.time() - submitted_at) * 1000),
+                    http_status=upstream_status, status=status,
+                    error=error_msg, streamed=1,
+                ))
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 # ── Background processing ─────────────────────────────────────────────────────

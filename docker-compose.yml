@@ -12,18 +12,34 @@ services:
     restart: unless-stopped
 
   wrapper:
-    image: honestjung/ocrwrapper:0.1.14
+    image: honestjung/ocrwrapper:0.2.1
     environment:
+      WRAPPER_ROLE: ocr
       VLLM_URL: http://nginx:80
       OCR_CONCURRENCY: "${OCR_CONCURRENCY:-6}"
       OCR_DPI: "150"
       DB_PATH: /data/ocrserver.db
+      LLM_DB_PATH: /data/llmserver.db
       MODE_TOKEN: "${MODE_TOKEN:-}"
     volumes:
       - ./data:/data
       - ./docker-compose.yml:/etc/ocrserver-compose.yml:ro
     depends_on:
       - chandra-a
+    restart: unless-stopped
+
+  # /llm/* proxy + request/response logging (mode-llm.sh로 활성화)
+  llmwrapper:
+    profiles: [llm]
+    image: honestjung/ocrwrapper:0.2.1
+    environment:
+      WRAPPER_ROLE: llm
+      LLM_UPSTREAM: http://llm:8000
+      LLM_DB_PATH: /data/llmserver.db
+    volumes:
+      - ./data:/data
+    depends_on:
+      - llm
     restart: unless-stopped
 
   chandra-a:
