@@ -1,8 +1,50 @@
-# HANDOFF — 2026-05-28 (per-page render in worker + POST async, wrapper 0.1.14)
+# HANDOFF — 2026-06-09 (LLM proxy wrapper + POST /ocr force flag, wrapper 0.2.1)
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-05-28 밤)
+## 방금 한 작업 (2026-06-09)
+
+LLM (`/llm/*`) 트래픽을 기록할 수 있게 wrapper 코드베이스에 LLM proxy
+모드를 합치고, OCR 결과에 빈 페이지 있을 때 client 가 강제로 다시 OCR
+시킬 수 있게 `POST /ocr` 에 `force` 옵션 추가. 세부
+`devlog/20260609_032_llm_proxy_and_force_flag.md`.
+
+- **구조**: 같은 이미지 (`honestjung/ocrwrapper:0.2.1`) 를 두 컨테이너로
+  띄움. `wrapper` (`WRAPPER_ROLE=ocr`, 기본) 는 기존 OCR + 대시보드 +
+  `/api/llm/*` (조회용, LLM DB RO). `llmwrapper` (`WRAPPER_ROLE=llm`,
+  compose profile `[llm]`) 는 `/v1/*` proxy + 기록 전담. event loop /
+  DB 분리로 OCR 큐가 LLM streaming proxy 의 어떤 stall 에도 영향받지 않게.
+- **DB**: `data/llmserver.db` (WAL) 신규. llmwrapper RW, wrapper RO.
+  `llm_requests` 테이블 — submitted/completed/model/endpoint/client_ip/
+  request_json/response_text/prompt_tokens/completion_tokens/total_tokens/
+  latency_ms/http_status/status/error/streamed. 본문은 65KB 로 truncate.
+- **라우팅**: 외부 URL 그대로 (`/llm/v1/chat/completions`). nginx `/llm/`
+  upstream 만 `llm:8000` → `llmwrapper:8000`. SSE 위해 `proxy_buffering
+  off` + `proxy_request_buffering off`. `/llm/health` 만 별도 location
+  으로 vllm 직결 (`/status` 가 실제 백엔드 health 보려면 필요).
+- **SSE streaming**: chunk 통과 + 누적 패턴. `aiter_lines()` 로 라인 단위
+  forward, `data: {...}` 의 `delta.content` 누적, vllm 마지막-1 chunk 의
+  `usage` 객체 캡처. 종료 시 `asyncio.create_task(db_llm_insert(...))` —
+  finally 에서 직접 await 하면 client_abort 시 GeneratorExit race.
+  `client_abort` 도 status 로 기록.
+- **force flag**: `POST /ocr` 의 `force: bool = Form(False)`. True 면
+  `db_find_existing_by_hash` + `db_find_done_by_filename` 둘 다 skip,
+  새 `job_id` 로 전체 OCR. 기존 row 보존, 다음 dedup 에선 새 잡이
+  최신이라 우선. 응답에 `forced: true` 포함. 빈 페이지 판정 (whitespace-
+  only 포함) 은 client 책임.
+- **검증**:
+  - non-streaming chat: status=ok, 15/50/65 토큰, 2813ms
+  - streaming 정상: status=ok, 9/10/19 토큰, usage chunk 캡처
+  - streaming 중단: status=client_abort
+  - `/api/llm/stats?range=24h` 통계 정상, `/status` 의 LLM 카드 24h row +
+    최근 요청 리스트 노출
+  - POST /ocr 같은 파일 → cached:true / force=true → 새 job_id
+
+- **배포**: wrapper image `0.1.14` → `0.2.1`. 큐 비어 있는 상태에서
+  recreate, in-flight 잡 영향 0. nginx 는 single-file bind mount inode
+  함정 회피 위해 `--force-recreate`.
+
+## 이전 작업 (2026-05-28 밤)
 
 큰 PDF (Stewart 1773p) 제출 시 대시보드가 4분 이상 먹통이던 문제 해결.
 세부 `devlog/20260528_031_per_page_render_in_worker.md`.
@@ -151,20 +193,26 @@ PaperMeister 가 60s 타임아웃으로 POST /ocr 이 5건 연속 실패한 인�
 ## 현재 상태 (snapshot)
 
 ### 운영 모드
-- nginx 모드: **OCR 2 GPU** (`nginx.ocr.conf` 활성, mode chip `2ocr`)
+- nginx 모드: **OCR 1 GPU + LLM** (`nginx.llm.conf` 활성, mode chip `llm+ocr`)
 - 운영 디렉터리: `/srv/ocrserver/` (jikhanjung 소유, sudo 없이 docker
   compose 가능)
 - 운영 컴포즈는 prebuilt image 만 참조
 
-### 컨테이너 / 이미지 (운영서버, 화요일 01:55 부팅 후)
+### 컨테이너 / 이미지 (운영서버)
 ```
-SERVICE     IMAGE                         STATUS
-chandra-a   honestjung/ocrserver:0.1.1    Up (healthy, GPU 0)
-chandra-b   honestjung/ocrserver:0.1.1    Up (healthy, GPU 1)
-nginx       nginx:alpine                  Up (nginx.ocr.conf)
-wrapper     honestjung/ocrwrapper:0.1.14  Up (OCR_CONCURRENCY=12)
-llm         vllm/vllm-openai:latest       Exited (0)   ← 의도대로
+SERVICE      IMAGE                         STATUS
+chandra-a    honestjung/ocrserver:0.1.1    Up (healthy, GPU 0)
+chandra-b    honestjung/ocrserver:0.1.1    (profile=ocr, 비활성)
+nginx        nginx:alpine                  Up (nginx.llm.conf)
+wrapper      honestjung/ocrwrapper:0.2.1   Up (WRAPPER_ROLE=ocr, OCR_CONCURRENCY=6)
+llmwrapper   honestjung/ocrwrapper:0.2.1   Up (WRAPPER_ROLE=llm)  ← 신규
+llm          vllm/vllm-openai:latest       Up (healthy, GPU 1, Qwen3-14B)
 ```
+
+### DB
+- `data/ocrserver.db` — OCR 잡/페이지. wrapper RW. ~1.5GB (jobs 7700+).
+- `data/metrics.db` — host metrics. metrics_collector 가 RW, wrapper RO.
+- `data/llmserver.db` — **신규**. llmwrapper RW, wrapper RO. WAL.
 
 ### 호스트 보호 / 메트릭
 - **하드웨어 watchdog: 활성** — `wdat_wdt`, PCH timeout 30s,
