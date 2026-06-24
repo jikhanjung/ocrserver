@@ -1,8 +1,28 @@
-# HANDOFF — 2026-06-24 (LLM 모델 업그레이드 Qwen3-14B → Qwen3-32B-AWQ)
+# HANDOFF — 2026-06-24 (NVLink 복구 + 27B TP=2 재실측 + /status LLMx2)
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-06-24)
+## 방금 한 작업 (2026-06-24 오후 — NVLink/27B/LLMx2)
+
+NVLink 복구(브리지 재안착) 확인 → 034 에서 보류했던 Qwen3.5-27B-dense 를
+TP=2 로 재실측 → 그래도 미채택 → 부산물로 /status 에 LLMx2 모드 추가.
+세부 `devlog/20260624_035_*` (NVLink 복구), `036_*` (27B 재실측 + LLMx2).
+
+- **NVLink 복구**: 전원 off → 브리지 재장착 → on. `topo -m` NODE→**NV2**,
+  4서브링크 25.781 GB/s, `nvlink -e`=0, dmesg sublink Error 소멸. 근본 원인
+  브리지 접촉 불량 확정. 정상값 기준: `topo -m`=NV2, `nvlink -e`=0.
+- **27B dense TP=2 재실측**: OOM 은 풀림(각 GPU 25.68 GiB). 하지만 aggregate
+  **12.85 tok/s** (현 32B-AWQ 20.2 보다 ~37% 느림) + GPU 2장 점유(OCR 중단)
+  + 콜드스타트 ~13분. GDN/mamba 하이브리드+멀티모달이라 무거움. **미채택**,
+  034 판단 실측 재확인. → 32B-AWQ 단일 GPU 가 여전히 최적.
+- **/status LLMx2 모드** (wrapper **0.2.2 → 0.2.3**): LLM 이 두 GPU(TP=2)를
+  점유하는 형상을 표시. compose llm 의 `--tensor-parallel-size`/`device_ids`
+  개수로 GPU 수 파싱(`_parse_llm_gpus`) → `_mode_from_probes` 가 n==0 &
+  llm_ok & gpus>=2 면 `llmx2`. status.html 칩 "LLM×2 (2 GPU)".
+  `_meta.llm_gpus` 노출. 현 compose 는 단일 GPU 라 칩 표시는 향후 TP=2 LLM
+  배포 시 자동. wrapper+llmwrapper 둘 다 0.2.3 recreate.
+
+## 이전 작업 (2026-06-24 오전 — LLM 모델 업그레이드)
 
 `llm` 서비스 모델을 **Qwen3-14B(fp16) → Qwen3-32B-AWQ(int4)** 로 교체. OCR
 은 안 건드림 (듀얼 분할 그대로). 이미지/wrapper 변경 없음 — compose 의 `llm`
@@ -253,8 +273,8 @@ SERVICE      IMAGE                         STATUS
 chandra-a    honestjung/ocrserver:0.1.1    Up (healthy, GPU 0)
 chandra-b    honestjung/ocrserver:0.1.1    (profile=ocr, 비활성)
 nginx        nginx:alpine                  Up (nginx.llm.conf)
-wrapper      honestjung/ocrwrapper:0.2.2   Up (WRAPPER_ROLE=ocr, OCR_CONCURRENCY=6)
-llmwrapper   honestjung/ocrwrapper:0.2.2   Up (WRAPPER_ROLE=llm)
+wrapper      honestjung/ocrwrapper:0.2.3   Up (WRAPPER_ROLE=ocr, OCR_CONCURRENCY=6)
+llmwrapper   honestjung/ocrwrapper:0.2.3   Up (WRAPPER_ROLE=llm)
 llm          vllm/vllm-openai:latest       Up (healthy, GPU 1, Qwen3-32B-AWQ)  ← 14B에서 교체
 ```
 
