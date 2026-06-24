@@ -43,12 +43,13 @@ command 모델 인자만 변경.
 - **모델 캐시**: `Qwen3-32B-AWQ` 는 `/srv/ocrserver/hf_cache` 에 받아둠.
   테스트로 받은 `Qwen3.5-35B-A3B-GPTQ-Int4`(~18GB) / 일부 27B 메타데이터도
   캐시에 남아있음 — 디스크 정리 시 후보.
-- **미해결 — NVLink 미인식** (devlog 034): dmesg 에 부팅 시 `GPU1
-  knvlinkCoreSetTx/RxSublinkModeCallback: Error` → GPU1 서브링크 학습 실패로
-  링크가 UP 못 됨, `topo -m` 이 PCIe(NODE) 폴백. 물리적 브리지 안착/접촉 불량
-  패턴 (persistence mode 로는 해결 불가). 현재 운영(32B 단일 GPU)엔 무영향,
-  향후 TP=2 쓸 때만 필요. 조치: 브리지 재안착(GPU1 쪽) → `nvidia-smi nvlink
-  -s/-e` 로 검증. 다음 물리 점검 때.
+- **✅ 해결 — NVLink 복구** (devlog 034 진단 → 035 복구): 전원 off →
+  NVLink 브리지 재장착 → 전원 on (034 의 1순위 권고). `topo -m` 이
+  NODE(PCIe) → **NV2**(bonded 2×NVLink) 로 복구, 4서브링크 모두
+  25.781 GB/s, `nvlink -e` 에러 카운터 0, dmesg sublink Error 소멸. 근본
+  원인 = 브리지 접촉 불량 확정. 이제 **TP=2 큰 모델 재시도 가능** (034 에서
+  PCIe 폴백 때문에 보류했던 27B dense / MoE 등). 정상값 기준: `topo -m`=NV2,
+  `nvlink -e`=0.
 
 ## 이전 작업 (2026-06-09)
 
