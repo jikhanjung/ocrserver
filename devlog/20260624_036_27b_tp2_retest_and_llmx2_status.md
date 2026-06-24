@@ -36,7 +36,7 @@ per-req 9.9–13.4 tok/s, 평균 12.1. 생성 중 GPU util 0% 관측.
 - **그러나 속도는 현 32B-AWQ 보다 ~37% 느림** (12.85 vs 20.2 tok/s). 원인
   추정: TP=2 동기화 오버헤드 + 이 모델이 **GDN/mamba 하이브리드 + 멀티모달**
   (로그에 `mamba page size`, `Encoder cache ... image items`) 이라
-  enforce-eager 에서 무거움. 콜드스타트 ~13분도 035 의 MoE(~11분)와 동급.
+  enforce-eager 에서 무거움. 콜드스타트 ~13분도 033 의 MoE 35B(~11분)와 동급.
 - **운영 비용**: GPU 2장 점유 → OCR 전면 중단. 단일 GPU 로 더 빠른 32B-AWQ
   가 모든 면에서 우위.
 - 결론: NVLink 가 살아도 27B dense 는 채택 안 함. 034 의 판단이 실측으로
