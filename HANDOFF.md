@@ -329,3 +329,7 @@ llm          vllm/vllm-openai:latest       Up (healthy, GPU 1, Qwen3-32B-AWQ)  �
   cat /sys/class/watchdog/watchdog0/state
   cat /sys/class/watchdog/watchdog0/bootstatus   # 0 = 정상, 그 외 = 트립 흔적
   ```
+
+---
+
+_세션 종료: 2026-06-24 — NVLink 복구 + 27B TP=2 재실측(미채택) + wrapper 0.2.3(LLMx2 모드). 코드·이미지·devlog 모두 push, 운영 `llm+ocr` 정상._
