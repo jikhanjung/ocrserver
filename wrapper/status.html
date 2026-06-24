@@ -271,9 +271,10 @@ function renderBackends(perBackend) {
 }
 
 function modeLabel(mode) {
-  // mode 값: down | llm | ocr | 2ocr | llm+ocr | llm+2ocr
+  // mode 값: down | llm | llmx2 | ocr | 2ocr | llm+ocr | llm+2ocr
   if (mode === 'down')      return { text: '전체 오프라인',     cls: 'danger' };
   if (mode === 'llm')       return { text: 'LLM 전용',          cls: '' };
+  if (mode === 'llmx2')     return { text: 'LLM×2 (2 GPU)',     cls: '' };
   if (mode === 'ocr')       return { text: 'OCR 1 GPU',         cls: '' };
   if (mode === '2ocr')      return { text: 'OCR 2 GPU',         cls: '' };
   if (mode === 'llm+ocr')   return { text: 'LLM + OCR 1 GPU',   cls: '' };

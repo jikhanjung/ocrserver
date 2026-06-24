@@ -542,16 +542,45 @@ _probe_lock = asyncio.Lock()
 # compose images cache — read /srv/ocrserver/docker-compose.yml (mounted RO)
 # to surface configured image tags per service on the status page.
 _COMPOSE_TTL = 60.0
-_compose_cache: dict = {"at": 0.0, "images": {}, "llm_model": None}
+_compose_cache: dict = {"at": 0.0, "images": {}, "llm_model": None, "llm_gpus": 1}
+
+
+def _parse_llm_gpus(llm_svc: dict, toks: list) -> int:
+    """How many GPUs the llm service is configured for. Primary signal is the
+    --tensor-parallel-size flag in its command; fallback is the count of
+    reserved device_ids in its deploy block. Defaults to 1."""
+    for i, t in enumerate(toks):
+        if not isinstance(t, str):
+            continue
+        if t in ("--tensor-parallel-size", "-tp") and i + 1 < len(toks):
+            try:
+                return max(1, int(toks[i + 1]))
+            except (ValueError, TypeError):
+                pass
+        if t.startswith("--tensor-parallel-size="):
+            try:
+                return max(1, int(t.split("=", 1)[1]))
+            except (ValueError, TypeError):
+                pass
+    try:
+        devices = ((llm_svc.get("deploy") or {}).get("resources") or {}) \
+            .get("reservations", {}).get("devices") or []
+        n = sum(len(d.get("device_ids") or []) for d in devices)
+        if n:
+            return n
+    except (AttributeError, TypeError):
+        pass
+    return 1
 
 
 def _refresh_compose_cache() -> dict:
     """Parse compose once per TTL: per-service image tags + the llm service's
-    configured model (first non-flag token of its command)."""
+    configured model (first non-flag token of its command) + its GPU count."""
     if time.time() - _compose_cache["at"] < _COMPOSE_TTL:
         return _compose_cache
     images: dict[str, str] = {}
     llm_model = None
+    llm_gpus = 1
     try:
         with open(COMPOSE_PATH) as f:
             data = yaml.safe_load(f) or {}
@@ -560,15 +589,18 @@ def _refresh_compose_cache() -> dict:
             img = svc.get("image")
             if img:
                 images[name] = img
-        cmd = (services.get("llm") or {}).get("command")
+        llm_svc = services.get("llm") or {}
+        cmd = llm_svc.get("command")
         toks = cmd.split() if isinstance(cmd, str) else (cmd or [])
         for t in toks:
             if isinstance(t, str) and t and not t.startswith("-"):
                 llm_model = t
                 break
+        llm_gpus = _parse_llm_gpus(llm_svc, toks)
     except Exception:
         pass
-    _compose_cache.update(at=time.time(), images=images, llm_model=llm_model)
+    _compose_cache.update(at=time.time(), images=images,
+                          llm_model=llm_model, llm_gpus=llm_gpus)
     return _compose_cache
 
 
@@ -578,6 +610,10 @@ def _read_compose_images() -> dict[str, str]:
 
 def _read_compose_llm_model() -> str | None:
     return _refresh_compose_cache()["llm_model"]
+
+
+def _read_compose_llm_gpus() -> int:
+    return _refresh_compose_cache()["llm_gpus"]
 
 
 async def _refresh_probe_cache() -> dict:
@@ -605,12 +641,16 @@ async def _refresh_probe_cache() -> dict:
     return _probe_cache
 
 
-def _mode_from_probes(cache: dict) -> str:
-    """Operational mode label inferred from which services are alive."""
+def _mode_from_probes(cache: dict, llm_gpus: int = 1) -> str:
+    """Operational mode label inferred from which services are alive. llm_gpus
+    (from compose) distinguishes single-GPU LLM-only ('llm') from a 2-GPU
+    tensor-parallel LLM occupying both GPUs ('llmx2')."""
     n = cache["ocr_alive"]
     llm_ok = bool(cache["llm"] and cache["llm"]["status"] == "ok")
     if n == 0:
-        return "llm" if llm_ok else "down"
+        if not llm_ok:
+            return "down"
+        return "llmx2" if llm_gpus >= 2 else "llm"
     ocr_part = "ocr" if (n == 1 and llm_ok) else f"{n}ocr"
     return f"llm+{ocr_part}" if llm_ok else ocr_part
 
@@ -632,11 +672,12 @@ async def api_services():
             "chandra_url": cache.get("chandra_url"),
             "llm_url": cache.get("llm_url"),
             "concurrency": CONCURRENCY,
-            "mode": _mode_from_probes(cache),
+            "mode": _mode_from_probes(cache, _read_compose_llm_gpus()),
             "probe_age_s": round(time.time() - cache["at"], 1),
             "uptime_s": int(time.time() - _start_time),
             "images": _read_compose_images(),
             "llm_model": _read_compose_llm_model(),
+            "llm_gpus": _read_compose_llm_gpus(),
         },
     }
 
@@ -683,7 +724,7 @@ async def api_stats():
         "ocr_backends_alive": cache["ocr_alive"],
         "ocr_backends_total": len(OCR_BACKENDS),
         "recommended_concurrency": cache["ocr_alive"] * OCR_PER_BACKEND_CONCURRENCY,
-        "mode": _mode_from_probes(cache),
+        "mode": _mode_from_probes(cache, _read_compose_llm_gpus()),
         "uptime_s": int(time.time() - _start_time),
         "concurrency": CONCURRENCY,
         "vllm_url": VLLM_URL,
