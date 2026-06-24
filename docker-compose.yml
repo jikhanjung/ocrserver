@@ -12,7 +12,7 @@ services:
     restart: unless-stopped
 
   wrapper:
-    image: honestjung/ocrwrapper:0.2.1
+    image: honestjung/ocrwrapper:0.2.2
     environment:
       WRAPPER_ROLE: ocr
       VLLM_URL: http://nginx:80
@@ -31,7 +31,7 @@ services:
   # /llm/* proxy + request/response logging (mode-llm.sh로 활성화)
   llmwrapper:
     profiles: [llm]
-    image: honestjung/ocrwrapper:0.2.1
+    image: honestjung/ocrwrapper:0.2.2
     environment:
       WRAPPER_ROLE: llm
       LLM_UPSTREAM: http://llm:8000
@@ -89,7 +89,7 @@ services:
     profiles: [llm]
     image: vllm/vllm-openai:latest
     command: >-
-      Qwen/Qwen3-14B
+      Qwen/Qwen3-32B-AWQ
       --served-model-name qwen
       --dtype float16
       --host 0.0.0.0

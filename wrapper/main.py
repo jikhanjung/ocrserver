@@ -26,7 +26,7 @@ LLM_DB_PATH = os.getenv("LLM_DB_PATH", "/data/llmserver.db")
 PDF_DIR = os.getenv("PDF_DIR", "/data/pdfs")
 VLLM_URL = os.getenv("VLLM_URL", "http://nginx:80")
 VLLM_MODEL = os.getenv("VLLM_MODEL", "chandra")
-LLM_UPSTREAM = os.getenv("LLM_UPSTREAM", "http://llm:8000")  # vLLM Qwen3-14B, role=llm only
+LLM_UPSTREAM = os.getenv("LLM_UPSTREAM", "http://llm:8000")  # vLLM (model per compose), role=llm only
 LLM_LOG_MAX_BYTES = int(os.getenv("LLM_LOG_MAX_BYTES", "65536"))  # truncate request/response text on insert
 CONCURRENCY = int(os.getenv("OCR_CONCURRENCY", "12"))
 DPI = int(os.getenv("OCR_DPI", "150"))
@@ -542,24 +542,42 @@ _probe_lock = asyncio.Lock()
 # compose images cache — read /srv/ocrserver/docker-compose.yml (mounted RO)
 # to surface configured image tags per service on the status page.
 _COMPOSE_TTL = 60.0
-_compose_cache: dict = {"at": 0.0, "images": {}}
+_compose_cache: dict = {"at": 0.0, "images": {}, "llm_model": None}
 
 
-def _read_compose_images() -> dict[str, str]:
+def _refresh_compose_cache() -> dict:
+    """Parse compose once per TTL: per-service image tags + the llm service's
+    configured model (first non-flag token of its command)."""
     if time.time() - _compose_cache["at"] < _COMPOSE_TTL:
-        return _compose_cache["images"]
+        return _compose_cache
     images: dict[str, str] = {}
+    llm_model = None
     try:
         with open(COMPOSE_PATH) as f:
             data = yaml.safe_load(f) or {}
-        for name, svc in (data.get("services") or {}).items():
+        services = data.get("services") or {}
+        for name, svc in services.items():
             img = svc.get("image")
             if img:
                 images[name] = img
+        cmd = (services.get("llm") or {}).get("command")
+        toks = cmd.split() if isinstance(cmd, str) else (cmd or [])
+        for t in toks:
+            if isinstance(t, str) and t and not t.startswith("-"):
+                llm_model = t
+                break
     except Exception:
         pass
-    _compose_cache.update(at=time.time(), images=images)
-    return images
+    _compose_cache.update(at=time.time(), images=images, llm_model=llm_model)
+    return _compose_cache
+
+
+def _read_compose_images() -> dict[str, str]:
+    return _refresh_compose_cache()["images"]
+
+
+def _read_compose_llm_model() -> str | None:
+    return _refresh_compose_cache()["llm_model"]
 
 
 async def _refresh_probe_cache() -> dict:
@@ -618,6 +636,7 @@ async def api_services():
             "probe_age_s": round(time.time() - cache["at"], 1),
             "uptime_s": int(time.time() - _start_time),
             "images": _read_compose_images(),
+            "llm_model": _read_compose_llm_model(),
         },
     }
 

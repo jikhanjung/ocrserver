@@ -1,8 +1,54 @@
-# HANDOFF — 2026-06-09 (LLM proxy wrapper + POST /ocr force flag, wrapper 0.2.1)
+# HANDOFF — 2026-06-24 (LLM 모델 업그레이드 Qwen3-14B → Qwen3-32B-AWQ)
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-06-09)
+## 방금 한 작업 (2026-06-24)
+
+`llm` 서비스 모델을 **Qwen3-14B(fp16) → Qwen3-32B-AWQ(int4)** 로 교체. OCR
+은 안 건드림 (듀얼 분할 그대로). 이미지/wrapper 변경 없음 — compose 의 `llm`
+command 모델 인자만 변경.
+
+- **선정 근거 (실측 A/B)**: RTX 8000(Turing sm_75) 단일 GPU 에서 3개 후보를
+  vLLM 0.20.2 같은 이미지로 실측:
+  - **Qwen3.5-35B-A3B-GPTQ-Int4 (MoE)**: ✅ 기동되나 콜드스타트 ~11분
+    (멀티모달 비전타워 warmup + GDN/FlashInfer JIT), A/B 에서 6건 중 1건
+    HTTP 500, 처리량 ~15 tok/s. 탈락.
+  - **Qwen3.5-27B-GPTQ-Int4 (dense)**: ❌ 로드 중 CUDA OOM. int4 로 안 덮인
+    부분(비전타워+GDN)이 fp16 으로 올라가 ~47GB 초과, 단일 48GB 에 안 들어감.
+    `--max-num-seqs 2` + expandable_segments 도 동일 OOM. TP=2 면 들어가지만
+    두 GPU 점유 → OCR 전면 중단이라 부적합.
+  - **Qwen3-32B-AWQ (표준 트랜스포머)**: ✅ 채택. 로드 ~74초, 6/6 성공,
+    한국어 요약/메타추출 품질 우수.
+- **속도 핵심 발견**: `llmserver.db` 실제 메타추출 프롬프트 6건으로 동일
+  하네스 측정 → **14B-fp16 18.5 tok/s vs 32B-AWQ 20.2 tok/s**. 32B 가 오히려
+  ~9% 빠름. 디코딩은 메모리 대역폭 병목이라 int4(토큰당 ~18GB 읽기) 가
+  fp16 14B(~28GB) 보다 적게 읽어서. 즉 **속도 손해 없는 업그레이드**.
+  (DB 과거 14B 실측 18.5 tok/s 와 통제 벤치 18.5 일치 → 방법론 검증됨.)
+- **품질**: 14B/32B/35B 모두 메타추출은 정확(한국어 문서 포함). 32B 는 DOI
+  접두사 정리 등 미세 개선. 실제 워크로드(서지 메타추출) 는 14B 로도 이미
+  충분했고, 32B 의 진짜 이점은 어려운 케이스/요약/챗 헤드룸.
+- **배포 절차**: dev tree `docker-compose.yml` 의 llm command 모델 인자만
+  수정 → `/srv/ocrserver/` 로 cp → `docker compose --project-directory
+  /srv/ocrserver --profile llm up -d --force-recreate llm`. served-model-name
+  은 `qwen` 유지 → 클라이언트(PaperMeister 등) 코드 무변경.
+- **검증**: `/llm/health` 200(46초), 운영 경로(nginx→llmwrapper→vllm) 로
+  `model:"qwen"` 샘플 추론 정상, llmwrapper 가 DB 기록 정상(qwen/ok/2111ms).
+- **/status 페이지 동적화 (wrapper 0.2.1 → 0.2.2)**: status.html 에
+  `Qwen3-14B` 가 하드코딩돼 있어 stale. 매번 안 고치도록 동적화 — main.py
+  의 compose 파서(`_refresh_compose_cache`)가 `llm` 서비스 command 의 첫
+  non-flag 토큰을 모델명으로 뽑아 `/api/services._meta.llm_model` 로 노출,
+  status.html 이 그걸로 `#llmModelShort/#llmModelFull` 채움. 앞으로 모델
+  교체 시 compose 만 바꾸면 페이지가 자동 반영. wrapper + llmwrapper 둘 다
+  0.2.2 로 recreate (같은 이미지 공유, 드리프트 방지).
+- **모델 캐시**: `Qwen3-32B-AWQ` 는 `/srv/ocrserver/hf_cache` 에 받아둠.
+  테스트로 받은 `Qwen3.5-35B-A3B-GPTQ-Int4`(~18GB) / 일부 27B 메타데이터도
+  캐시에 남아있음 — 디스크 정리 시 후보.
+- **미해결**: `nvidia-smi topo -m` 이 GPU0↔GPU1 을 `NODE`(PCIe) 로 보고,
+  NVLink 링크 inactive + capabilities 빈 응답. 물리 브리지 있다는데 드라이버가
+  NVLink 를 못 잡는 중 → TP 성능에 직결. 브리지 재안착 / dmesg / persistence
+  mode 점검 필요 (별도 세션).
+
+## 이전 작업 (2026-06-09)
 
 LLM (`/llm/*`) 트래픽을 기록할 수 있게 wrapper 코드베이스에 LLM proxy
 모드를 합치고, OCR 결과에 빈 페이지 있을 때 client 가 강제로 다시 OCR
@@ -204,9 +250,9 @@ SERVICE      IMAGE                         STATUS
 chandra-a    honestjung/ocrserver:0.1.1    Up (healthy, GPU 0)
 chandra-b    honestjung/ocrserver:0.1.1    (profile=ocr, 비활성)
 nginx        nginx:alpine                  Up (nginx.llm.conf)
-wrapper      honestjung/ocrwrapper:0.2.1   Up (WRAPPER_ROLE=ocr, OCR_CONCURRENCY=6)
-llmwrapper   honestjung/ocrwrapper:0.2.1   Up (WRAPPER_ROLE=llm)  ← 신규
-llm          vllm/vllm-openai:latest       Up (healthy, GPU 1, Qwen3-14B)
+wrapper      honestjung/ocrwrapper:0.2.2   Up (WRAPPER_ROLE=ocr, OCR_CONCURRENCY=6)
+llmwrapper   honestjung/ocrwrapper:0.2.2   Up (WRAPPER_ROLE=llm)
+llm          vllm/vllm-openai:latest       Up (healthy, GPU 1, Qwen3-32B-AWQ)  ← 14B에서 교체
 ```
 
 ### DB
