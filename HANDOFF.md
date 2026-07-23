@@ -1,8 +1,31 @@
-# HANDOFF — 2026-06-24 (NVLink 복구 + 27B TP=2 재실측 + /status LLMx2)
+# HANDOFF — 2026-07-23 (NVIDIA 드라이버 스큐 인시던트 → 리부팅 복구)
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-06-24 오후 — NVLink/27B/LLMx2)
+## 방금 한 작업 (2026-07-23 — 드라이버 버전 불일치 복구 + 재발 방지)
+
+호스트 리부팅(~09:24) 직후 `unattended-upgrades` 가 NVIDIA 드라이버를
+`595.71.05 → 595.84` 로 자동 업그레이드 → 로드된 커널 모듈(구)과 userspace(신)
+**Driver/library version mismatch** → GPU 컨테이너(chandra-a, llm) 전면 다운.
+`unattended_upgrades_docker` gotcha 의 드라이버 변종. 세부
+`devlog/20260723_037_nvidia_driver_mismatch_unattended_upgrade.md`.
+
+- **복구**: `sudo reboot` 로 로드 모듈을 595.84 로 정렬 → compose restart 정책
+  으로 전 컨테이너 복귀. **검증 완료** (리부팅 후 uptime 몇 분 시점):
+  - `nvidia-smi` 595.84, NVML 595.84 일치. 두 GPU 정상, 두 `VLLM::EngineCore`
+    프로세스(chandra-a GPU0, llm GPU1) 기동.
+  - 컨테이너 전부 Up. cold start: llm ~1.5분, chandra-a ~6분 후 둘 다 healthy.
+  - 운영 경로(nginx:8080) `/health` 200, `/llm/health` 200,
+    `/api/services._meta` mode=`llm+ocr`, llm_model=`Qwen/Qwen3-32B-AWQ`.
+- **재발 방지 (적용 완료)**: `/etc/apt/apt.conf.d/52-nvidia-blacklist` 신설 —
+  `unattended-upgrades` 가 `nvidia-` / `libnvidia` / `linux-firmware-nvidia`
+  자동 업그레이드 못 하도록 blacklist. `apt-config dump` 로 병합 확인.
+  단 blacklist 는 **자동** 업그레이드만 막음 — 수동 `apt upgrade` 는 여전히
+  드라이버를 올리므로 드라이버 갱신은 계획된 리부팅과 함께만.
+  주의: 패턴 `nvidia-` 가 `nvidia-container-toolkit` 도 함께 고정.
+- **devlog 037 untracked** — 아직 commit 안 됨 (사용자 요청 시 커밋).
+
+## 이전 작업 (2026-06-24 오후 — NVLink/27B/LLMx2)
 
 NVLink 복구(브리지 재안착) 확인 → 034 에서 보류했던 Qwen3.5-27B-dense 를
 TP=2 로 재실측 → 그래도 미채택 → 부산물로 /status 에 LLMx2 모드 추가.
@@ -332,4 +355,4 @@ llm          vllm/vllm-openai:latest       Up (healthy, GPU 1, Qwen3-32B-AWQ)  �
 
 ---
 
-_세션 종료: 2026-06-24 — NVLink 복구 + 27B TP=2 재실측(미채택) + wrapper 0.2.3(LLMx2 모드). 코드·이미지·devlog 모두 push, 운영 `llm+ocr` 정상._
+_세션 종료: 2026-07-23 — NVIDIA 드라이버 스큐(595.71.05→595.84 unattended-upgrade) 인시던트, 리부팅으로 전 스택 복구·검증. 재발 방지 blacklist(`52-nvidia-blacklist`) 적용. devlog 037 작성(untracked). 운영 `llm+ocr` 정상._
