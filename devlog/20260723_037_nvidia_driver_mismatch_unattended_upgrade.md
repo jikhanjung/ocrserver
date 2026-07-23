@@ -104,6 +104,58 @@ Applying pinning: PkgPin(pkg='/^libnvidia/', priority=-32768)
 Applying pinning: PkgPin(pkg='/^linux-firmware-nvidia/', priority=-32768)
 ```
 
+## 리부팅 후 발현한 2차 회귀 — 하드웨어 watchdog 로드 실패
+
+리부팅으로 드라이버는 복구됐으나, 같은 리부팅이 커널을 **7.0.0-27 → 7.0.0-28**
+로도 범프(unattended-upgrade)하면서 devlog 026 의 하드웨어 watchdog 가 죽음.
+
+```
+$ cat /sys/class/watchdog/watchdog0/state
+cat: .../state: No such file or directory        # 디바이스 자체가 없음
+$ lsmod | grep wdat                               # (없음)
+$ journalctl -b | grep -i wdat
+systemd-modules-load[269]: Module 'wdat_wdt' is deny-listed (by kmod)
+systemd[1]: Failed to open any watchdog device before the initial transaction completed
+```
+
+**원인**: Ubuntu 커널 패키지가 per-kernel **자동생성 denylist** 를 배포 —
+`/usr/lib/modprobe.d/blacklist_linux_7.0.0-28-generic.conf:70` 의
+`blacklist wdat_wdt` (pkg `linux-modules-7.0.0-28-generic`, "Kernel supplied
+blacklist"). 최신 `systemd-modules-load` 가 이 denylist 를 존중해서 기존
+`/etc/modules-load.d/watchdog.conf` 강제로드를 무시 → `/dev/watchdog0` 미생성,
+PID1 이 watchdog 못 잡음. WDAT ACPI 테이블·모듈 파일은 정상 존재.
+
+**우회 원리**: `blacklist` 는 alias 자동로드 + systemd-modules-load 만 막고,
+명시적 `modprobe wdat_wdt` (by-name) 는 여전히 로드됨
+(`modprobe -n -v wdat_wdt` → `insmod .../wdat_wdt.ko.zst`, exit 0 로 확인).
+denylist 파일은 커널마다 재생성되므로 kernel-version 무관한 우회가 필수.
+
+**즉시 복구 (리부팅 없이)**:
+```
+sudo modprobe wdat_wdt          # by-name 로드 — blacklist 우회
+sudo systemctl daemon-reexec    # PID1 이 /dev/watchdog0 재오픈 → ping 재개
+# 검증: state=active, bootstatus=0, WatchdogDevice=/dev/watchdog0 ✅
+```
+
+**영구 수정 (리부팅+커널범프 내성)**: `/etc/modules-load.d/watchdog.conf`
+(이제 denylist 에 막혀 무력) 제거하고 oneshot 서비스로 by-name 강제로드.
+`/etc/systemd/system/wdat-watchdog-load.service`:
+```
+[Unit]
+Description=Force-load wdat_wdt hardware watchdog (override Ubuntu per-kernel blacklist)
+DefaultDependencies=no
+Before=systemd-modules-load.service sysinit.target
+ConditionPathExists=/sys/firmware/acpi/tables/WDAT
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/sbin/modprobe wdat_wdt
+[Install]
+WantedBy=sysinit.target
+```
+`systemctl enable` 완료, `is-enabled`=enabled. 검증: state=active,
+bootstatus=0, `/dev/watchdog0` 존재, wdat_wdt refcount 2.
+
 ## 주의점
 
 - 이 blacklist 는 `nvidia-container-toolkit` 도 함께 고정(패턴 `nvidia-` 매칭).
@@ -112,3 +164,6 @@ Applying pinning: PkgPin(pkg='/^linux-firmware-nvidia/', priority=-32768)
   `nvidia-firmware`, `nvidia-kernel`)로 좁혀야 함.
 - blacklist 는 **자동** 업그레이드만 막음. 수동 `apt upgrade` 는 여전히 드라이버를
   올리므로, 드라이버 갱신은 반드시 계획된 리부팅과 함께 의도적으로 수행.
+- **교훈**: 리부팅은 두 가지를 동시에 바꾼다 — 드라이버 스큐를 고치지만
+  커널도 범프한다. 커널 범프는 per-kernel denylist·모듈 ABI 등 부수효과가
+  있으니, 리부팅 후 GPU 뿐 아니라 watchdog·기타 커널 의존 항목도 재검증할 것.

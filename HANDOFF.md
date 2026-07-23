@@ -23,7 +23,15 @@
   단 blacklist 는 **자동** 업그레이드만 막음 — 수동 `apt upgrade` 는 여전히
   드라이버를 올리므로 드라이버 갱신은 계획된 리부팅과 함께만.
   주의: 패턴 `nvidia-` 가 `nvidia-container-toolkit` 도 함께 고정.
-- **devlog 037 untracked** — 아직 commit 안 됨 (사용자 요청 시 커밋).
+- **2차 회귀 — 하드웨어 watchdog (같은 리부팅)**: 같은 리부팅이 커널을
+  7.0.0-27 → **7.0.0-28** 로도 범프 → 커널이 배포하는 per-kernel denylist
+  (`/usr/lib/modprobe.d/blacklist_linux_7.0.0-28-generic.conf` 의
+  `blacklist wdat_wdt`)를 systemd-modules-load 가 존중 → `/dev/watchdog0`
+  미생성, devlog 026 watchdog 사망. **수정 완료**: `modules-load.d` 대신
+  oneshot 서비스(`/etc/systemd/system/wdat-watchdog-load.service`)가
+  `wdat_wdt` 를 **by-name modprobe**(blacklist 우회)로 강제로드. enable 완료,
+  state=active/bootstatus=0/WatchdogDevice=/dev/watchdog0 검증. 커널 범프
+  내성 확보. 메모리 `reference_watchdog_setup.md` 갱신.
 
 ## 이전 작업 (2026-06-24 오후 — NVLink/27B/LLMx2)
 
@@ -312,6 +320,9 @@ llm          vllm/vllm-openai:latest       Up (healthy, GPU 1, Qwen3-32B-AWQ)  �
   `WatchdogLastPingTimestamp` 확인 가능. 다음 reboot 시
   `/sys/class/watchdog/watchdog0/bootstatus` 가 0 이 아니면 자동
   재부팅 트립 흔적.
+  - **2026-07-23 변경**: 로드 방식이 `/etc/modules-load.d/watchdog.conf`
+    → oneshot `wdat-watchdog-load.service` (by-name modprobe, 커널
+    denylist 우회). 커널 범프 시 재발 방지. 상세는 devlog 037.
 - `ocrserver-metrics.timer` 활성, 1분 주기 → `/srv/ocrserver/data/metrics.db`
 - `ocrserver-gpu-power-limit.service` 활성 — 두 RTX 8000 power limit
   230W 를 boot 마다 자동 적용 (025 에서 설치, 이번 reboot 에 첫 자동
@@ -355,4 +366,4 @@ llm          vllm/vllm-openai:latest       Up (healthy, GPU 1, Qwen3-32B-AWQ)  �
 
 ---
 
-_세션 종료: 2026-07-23 — NVIDIA 드라이버 스큐(595.71.05→595.84 unattended-upgrade) 인시던트, 리부팅으로 전 스택 복구·검증. 재발 방지 blacklist(`52-nvidia-blacklist`) 적용. devlog 037 작성(untracked). 운영 `llm+ocr` 정상._
+_세션 종료: 2026-07-23 — NVIDIA 드라이버 스큐(595.71.05→595.84 unattended-upgrade) 인시던트, 리부팅으로 전 스택 복구·검증. 재발 방지 blacklist(`52-nvidia-blacklist`) 적용. 2차로 커널 범프(27→28)가 watchdog denylist 회귀 유발 → oneshot 서비스로 by-name 강제로드 복구. devlog 037 + watchdog 메모리 갱신. 운영 `llm+ocr` 정상._
