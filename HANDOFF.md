@@ -412,8 +412,10 @@ llm          vllm/vllm-openai:latest       Up 8h (healthy, GPU 1, Qwen3-32B-AWQ)
   검증: `cat /sys/kernel/kexec_crash_loaded` → **1** 이어야 함
   (`systemctl status kdump-tools` 는 꺼져 있어도 정상처럼 보이니 쓰지 말 것).
   - 실측 소요: panic → vmcore 저장완료 **100초**, 총 다운타임 2분 31초.
-  - `/var/crash/202607270505/` 에 sysrq 테스트 vmcore 449M 보관 중
-    (검증용 — 디스크 정리 시 삭제 가능).
+    덤프 크기 449M (호스트 RAM 사용 10GB 기준).
+  - sysrq 테스트 덤프는 검증 후 삭제함. **`/var/crash` 는 현재 비어 있음**
+    (`kdump_lock` / `kexec_cmd` 는 kdump-tools 운영 파일이라 삭제 대상 아님).
+    → 앞으로 여기 타임스탬프 디렉터리가 생기면 **실제 프리즈**의 vmcore.
   - 커널 디버그 심볼(dbgsym)은 **아직 없음** — ddebs 에 7.0.0-28 미발행.
     ddebs 저장소는 등록해 둠. 심볼 없이도 dmesg 백트레이스는 심볼화돼 읽힘.
 - `ocrserver-metrics.timer` 활성, 1분 주기 → `/srv/ocrserver/data/metrics.db`
