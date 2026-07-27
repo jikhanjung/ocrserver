@@ -1,8 +1,59 @@
-# HANDOFF — 2026-07-23 (NVIDIA 드라이버 스큐 인시던트 → 리부팅 복구)
+# HANDOFF — 2026-07-27 (무증상 프리즈 4회 발견 → kdump 활성화)
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-07-23 — 드라이버 버전 불일치 복구 + 재발 방지)
+## 방금 한 작업 (2026-07-27 — 프리즈 4회 발견 + forensic 인프라 구축)
+
+상태 점검 중 **2026-07-26 하루에 호스트가 4번 freeze** 했고 watchdog 이
+매번 자동 리셋한 것을 발견. 사용자는 인지 못 한 상태였음 (70~100초 만에
+복구돼서 밖에서 보면 무사고). devlog 026 금요일 프리즈와 동일 시그니처.
+세부 `devlog/20260727_038_silent_freezes_and_kdump_enablement.md`.
+
+- **프리즈 시각 (UTC)**: 04:17:29 / 04:42:27 / 06:26:53 / 19:26:30.
+  부팅 간격 100s / 70s / 86s / 79s = watchdog 트립 + POST 패턴.
+  직전 3일(07-23 18:37 ~ 07-26 04:17)은 안정이었음.
+- **죽을 때 로그**: 4번 다 1분 주기 `ocrserver-metrics.service` 의
+  "Finished" 한 줄 뒤로 **아무것도 없음**. shutdown 없음, panic/oops 없음,
+  **Xid/NVRM 없음**, MCE 없음, OOM 없음. `metrics.db` 도 마지막 샘플까지
+  평탄 (load ~2.0, mem 10GB, gpu0 0%/41°C, gpu1 100%/78°C). 선행 신호 0.
+- **동시간대 vLLM EngineCore 크래시 9회** (03:15~20:05). 컨테이너
+  RestartCount=2, restart 정책으로 자력 복구. 프리즈와 **인과 미확정** —
+  크래시→프리즈 3건, 크래시만 3건, 프리즈만 1건으로 선후 불일정.
+  크래시 시점 vllm 로그는 logrotate 로 이미 유실.
+- **핵심 발견 — vmcore 체인이 3군데 다 끊겨 있었음** (그래서 026 이후
+  지금까지 원인 규명이 계속 막혔던 것):
+  1. `USE_KDUMP=0` (Ubuntu 기본값) → `kexec_crash_loaded=0`.
+     `kdump-tools.service` 는 `active (exited)` 로 **멀쩡해 보이지만**
+     `/etc/init.d/kdump-tools` 가 `[ "$USE_KDUMP" -ne 0 ] || exit 0` 로
+     빠져나가고 있었음. **서비스 status 로 판단하면 속는다.**
+  2. `hardlockup_panic=0` → 조용한 프리즈가 panic 으로 전환 안 됨 →
+     kdump 트리거 자체가 발생 안 함. 우리 증상에 가장 결정적.
+  3. HW watchdog `timeout=10s` < 하드락업 판정 시간(~20s) → 1·2 를 고쳐도
+     판정 전에 리셋되는 **구조적 불가능** 상태. `max_timeout=613` 확인.
+- **적용 완료 + 검증**: `USE_KDUMP=1` + `KDUMP_NUM_DUMPS=5`,
+  `/etc/sysctl.d/60-lockup-panic.conf` (`hardlockup_panic=1`,
+  `panic_on_oops=1`, `panic=60`), watchdog `RuntimeWatchdogSec=10s→180s`.
+  → `kexec_crash_loaded=1`, `timeout=180`, `kdump-config status` =
+  **ready to kdump**. 컨테이너 5개 무영향.
+  `softlockup_panic` 은 **의도적 제외** (GPU 24/7 부하 중 오탐 재부팅 위험).
+- **커널 범프 내성 확인**: 037 의 wdat_wdt 함정이 kdump 엔 해당 없음.
+  `kdump-config load` 가 매 부팅 `manage_symlinks` 로 `KVER=$(uname -r)`
+  기준 심볼릭 링크를 재생성 → 커널 올라가도 자동 추종.
+- **메모리 정정 2건** (기존 기록이 틀렸음):
+  - watchdog timeout "30초 read-only, 변경 불가" → **오류**. 실제 10초였고
+    `max_timeout=613`, `RuntimeWatchdogSec` 으로 변경 가능 (180s 검증 완료).
+  - `bootstatus != 0 = 트립 흔적` → **이 보드에선 성립 안 함**. 리셋 4회
+    후에도 계속 `0`. `0` 보고 "트립 없었다" 결론내면 정반대로 틀림.
+    대신 `journalctl --list-boots` + 각 부팅 마지막 줄을 쓸 것.
+- **한계**: CPU 하드락업이면 잡히지만 PCIe fatal / CPU 완전 정지면 NMI 가
+  안 떠서 vmcore 없이 리셋됨. 07-26 프리즈가 어느 쪽인지는 **아직 미상**
+  (양쪽 다 무로그). 다음 프리즈 후 `/var/crash` 가 비었으면 후자로 판정하고
+  netconsole / serial console 로 넘어갈 것.
+- **미검증**: sysrq 로 의도적 panic 을 내는 end-to-end 테스트는 미수행.
+  (테스트 전 `sudo sysctl -w kernel.sysrq=1` 필요 — 현재 176 이라 crash
+  비트 0x40 꺼짐.)
+
+## 이전 작업 (2026-07-23 — 드라이버 버전 불일치 복구 + 재발 방지)
 
 호스트 리부팅(~09:24) 직후 `unattended-upgrades` 가 NVIDIA 드라이버를
 `595.71.05 → 595.84` 로 자동 업그레이드 → 로드된 커널 모듈(구)과 userspace(신)
@@ -298,16 +349,26 @@ PaperMeister 가 60s 타임아웃으로 POST /ocr 이 5건 연속 실패한 인�
   compose 가능)
 - 운영 컴포즈는 prebuilt image 만 참조
 
-### 컨테이너 / 이미지 (운영서버)
+### 컨테이너 / 이미지 (운영서버) — 2026-07-27 04:20 확인
 ```
 SERVICE      IMAGE                         STATUS
-chandra-a    honestjung/ocrserver:0.1.1    Up (healthy, GPU 0)
+chandra-a    honestjung/ocrserver:0.1.1    Up 9h (healthy, GPU 0)
 chandra-b    honestjung/ocrserver:0.1.1    (profile=ocr, 비활성)
-nginx        nginx:alpine                  Up (nginx.llm.conf)
-wrapper      honestjung/ocrwrapper:0.2.3   Up (WRAPPER_ROLE=ocr, OCR_CONCURRENCY=6)
-llmwrapper   honestjung/ocrwrapper:0.2.3   Up (WRAPPER_ROLE=llm)
-llm          vllm/vllm-openai:latest       Up (healthy, GPU 1, Qwen3-32B-AWQ)  ← 14B에서 교체
+nginx        nginx:alpine                  Up 9h (nginx.llm.conf)
+wrapper      honestjung/ocrwrapper:0.2.3   Up 9h (WRAPPER_ROLE=ocr, OCR_CONCURRENCY=6)
+llmwrapper   honestjung/ocrwrapper:0.2.3   Up 9h (WRAPPER_ROLE=llm)
+llm          vllm/vllm-openai:latest       Up 8h (healthy, GPU 1, Qwen3-32B-AWQ)
 ```
+현재 부팅은 2026-07-26 19:27:49 UTC 시작 (직전 프리즈로부터 자동 복구).
+`llm` 은 07-26 20:05 EngineCore 크래시 후 재시작된 상태 (RestartCount=2).
+
+### 워크로드 현황 (2026-07-27)
+- **OCR: 7주째 유휴.** 마지막 잡 **2026-06-09 07:00**. 큐 0/0.
+  누적 7,767건 (done 7,720 / done_with_errors 12 / failed 35).
+  chandra-a 는 GPU0 메모리만 점유, util 0%.
+- **LLM: 사용자가 2026-07-27 ~04:33 에 PaperMeister 중지.** 그 전까지
+  레퍼런스 추출로 하루 ~2,200건 / ~400만 토큰 24/7 가동 (누적 53,281건).
+  중지 후 두 GPU 다 util 0%, GPU1 온도 78→42°C.
 
 ### DB
 - `data/ocrserver.db` — OCR 잡/페이지. wrapper RW. ~1.5GB (jobs 7700+).
@@ -315,14 +376,19 @@ llm          vllm/vllm-openai:latest       Up (healthy, GPU 1, Qwen3-32B-AWQ)  �
 - `data/llmserver.db` — **신규**. llmwrapper RW, wrapper RO. WAL.
 
 ### 호스트 보호 / 메트릭
-- **하드웨어 watchdog: 활성** — `wdat_wdt`, PCH timeout 30s,
-  systemd ping 10s. PID 1 (`systemd`) 가 `/dev/watchdog0` 잡고 ping 중.
-  `WatchdogLastPingTimestamp` 확인 가능. 다음 reboot 시
-  `/sys/class/watchdog/watchdog0/bootstatus` 가 0 이 아니면 자동
-  재부팅 트립 흔적.
+- **하드웨어 watchdog: 활성** — `wdat_wdt`, `/dev/watchdog0`.
+  **timeout 180s** (2026-07-27 에 10s → 180s 상향, kdump 덤프 시간 확보용).
+  systemd 가 절반 주기로 ping.
+  - ⚠️ **`bootstatus` 는 이 보드에서 신뢰 불가** — 07-26 리셋 4회 후에도
+    계속 `0`. 트립 판정은 `journalctl --list-boots` + 각 부팅 마지막 줄로.
   - **2026-07-23 변경**: 로드 방식이 `/etc/modules-load.d/watchdog.conf`
     → oneshot `wdat-watchdog-load.service` (by-name modprobe, 커널
     denylist 우회). 커널 범프 시 재발 방지. 상세는 devlog 037.
+- **kdump: 활성** (2026-07-27 신규, devlog 038) — 프리즈 시 vmcore 확보용.
+  `USE_KDUMP=1`, `hardlockup_panic=1`, watchdog 180s 세 개가 **세트로**
+  있어야 동작. 덤프 위치 `/var/crash` (최대 5개).
+  검증: `cat /sys/kernel/kexec_crash_loaded` → **1** 이어야 함
+  (`systemctl status kdump-tools` 는 꺼져 있어도 정상처럼 보이니 쓰지 말 것).
 - `ocrserver-metrics.timer` 활성, 1분 주기 → `/srv/ocrserver/data/metrics.db`
 - `ocrserver-gpu-power-limit.service` 활성 — 두 RTX 8000 power limit
   230W 를 boot 마다 자동 적용 (025 에서 설치, 이번 reboot 에 첫 자동
@@ -338,15 +404,37 @@ llm          vllm/vllm-openai:latest       Up (healthy, GPU 1, Qwen3-32B-AWQ)  �
 
 ## 곧 해야 할 작업
 
-백로그는 [TODOs.md](TODOs.md) 로 이동. 우선순위 + 분류 + 오늘 새로 늘어난
-항목 (mode 스크립트의 nginx reload, lifespan resume sync read, 잡 fair
-스케줄링, fitz.open 중복) 포함.
+이번 세션에서 새로 생긴 항목 (우선순위 순):
+
+1. **kdump end-to-end 검증** — 설정만 맞고 실전에서 안 잡히는 경우가 흔함.
+   유휴 시점에 `sudo sysctl -w kernel.sysrq=1` 후
+   `echo c | sudo tee /proc/sysrq-trigger` → 재부팅 후 `/var/crash` 확인.
+   (박스 재부팅 동반. 2026-07-27 현재 OCR/LLM 둘 다 유휴라 창은 열려 있음.)
+2. **프리즈 재발 감시** — 다음 프리즈 후 `/var/crash` 확인.
+   비어 있으면 NMI 도 못 뜨는 펌웨어 레벨 정지로 판정 → netconsole /
+   serial console 로깅으로 전환.
+3. **docker 로그 로테이션 명시** — `/etc/docker/daemon.json` 에
+   `max-size`/`max-file` 없음. 이번에 vLLM 크래시 시점 로그가 통째로
+   유실됨. 최소 며칠치는 남게 설정.
+4. **vLLM EngineCore 크래시 원인 추적** — 07-26 에 9회. 로그가 남기
+   시작하면 재조사. 프리즈와의 인과 미확정.
+5. 잔재 정리 (미관/혼동 방지): 부팅 시 `wdat_wdt is deny-listed` 경고
+   (037 에서 대체된 옛 modules-load.d 잔재), `wdat-watchdog-load.service`
+   의 `Documentation=` 이 URL 이 아니라 부팅마다 `Invalid URL` 3줄.
+6. **디스크**: 루트 83% 사용 (271G/344G, 59G 여유). `hf_cache` 에 테스트로
+   받은 Qwen3.5-35B-A3B(~18GB)/27B 메타데이터가 정리 후보 (devlog 033).
+
+기존 백로그는 [TODOs.md](TODOs.md) (mode 스크립트의 nginx reload,
+lifespan resume sync read, 잡 fair 스케줄링, fitz.open 중복 등).
 
 ## 참고 위치
 
-- 데브로그: `devlog/20260520_013_*.md` ~ `20260526_026_friday_freeze_incident.md`
+- 데브로그: `devlog/20260520_013_*.md` ~
+  `20260727_038_silent_freezes_and_kdump_enablement.md`
 - 메모리(자동 컨텍스트): `~/.claude/projects/-home-jikhanjung-projects-ocrserver/memory/`
-  - 신규 추가: `reference_watchdog_setup.md` (watchdog 위치 + 검증 명령)
+  - `reference_watchdog_setup.md` (2026-07-27 정정: timeout 180s 변경 가능,
+    bootstatus 신뢰 불가)
+  - `reference_kdump_setup.md` (신규 — kdump 3-고리 구조 + 한계)
 - 메트릭 스크립트: `scripts/metrics_collector.py`, `scripts/systemd/`
 - 운영 명령:
   ```bash
@@ -366,4 +454,4 @@ llm          vllm/vllm-openai:latest       Up (healthy, GPU 1, Qwen3-32B-AWQ)  �
 
 ---
 
-_세션 종료: 2026-07-23 — NVIDIA 드라이버 스큐(595.71.05→595.84 unattended-upgrade) 인시던트, 리부팅으로 전 스택 복구·검증. 재발 방지 blacklist(`52-nvidia-blacklist`) 적용. 2차로 커널 범프(27→28)가 watchdog denylist 회귀 유발 → oneshot 서비스로 by-name 강제로드 복구. devlog 037 + watchdog 메모리 갱신. 운영 `llm+ocr` 정상._
+_세션 종료: 2026-07-27 — 상태 점검 중 07-26 호스트 프리즈 4회 발견(watchdog 이 매번 자동 복구해서 은폐돼 있었음). 죽을 때 로그는 4번 다 무증상(panic/Xid/MCE 전무). 원인 규명이 막힌 근본 이유가 vmcore 체인 3군데 단절(`USE_KDUMP=0` + `hardlockup_panic=0` + watchdog 10s < 락업 판정 20s)임을 확인하고 셋 다 수정 → `ready to kdump` 검증. 커널 범프 내성도 확인(037 함정 해당 없음). watchdog 메모리 2건 정정(timeout 변경 가능, bootstatus 신뢰 불가). devlog 038. **근본 원인은 여전히 미상 — 다음 프리즈의 vmcore 가 관건.** sysrq end-to-end 테스트 미수행. PaperMeister 중지로 07-27 04:33 이후 OCR/LLM 둘 다 유휴._
