@@ -1,8 +1,16 @@
-# HANDOFF — 2026-07-27 (프리즈 4회 → kdump 활성화 + EngineCore 세그폴트 추적)
+# HANDOFF — 2026-07-27 (프리즈 원인 확정: CPU IFU 패리티 에러)
 
-> **내일 첫 작업: Marlin 커널 배제 테스트** (아래 "곧 해야 할 작업" 3번).
-> `--quantization awq` 한 줄. GPU 스왑은 우선순위 내려감 — 이유는 devlog 039
-> 증거 6·7. 오늘은 현 구성 그대로 관찰 중 — 07-27 05:06 재부팅 이후 카운트.
+> **🔴 이 박스가 현재 상태의 전부다.**
+> 07-27 09:02 프리즈를 kdump 가 처음으로 캡처했고, 사인은
+> **Fatal Machine Check Exception — Bank 0 (IFU), internal parity error,
+> PCC=1**. DRAM 이 아니라 **CPU 코어 내부** 결함이다 (`ADDRV=0`).
+> 같은 날 오전 세그폴트 크래시율이 **설정 불변인데 9배**로 뛴 것이 확인돼
+> (devlog 040 §5), **039 의 "AWQ/Marlin 커널" 가설과 "프리즈/세그폴트 분리"
+> 는 둘 다 철회**. 하나의 열화된 CPU 가 두 증상을 모두 낸다는 것이 현재 결론.
+>
+> **다음 작업: BIOS F1(2017) → 최신 업데이트** (아래 "곧 해야 할 작업" 1번).
+> `--quantization awq` 실험은 **취소**됐다 — 하지 말 것.
+> `/var/crash/202607270903/` 은 **첫 실물 vmcore, 절대 지우지 말 것.**
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
@@ -156,6 +164,58 @@
   주소공간에 없어서 그 자체로 손상을 일으키진 않음. **BIOS 가 F1/2017-07-04
   출시 초기 펌웨어**라 메모리 트레이닝 미숙 가능성 있음(스틱 불량이 아닐 수도).
   이 박스엔 접촉불량 전례 있음(034/035 NVLink 브리지) → 재장착 먼저 시도.
+
+> ⚠️ **이 절(②)의 결론은 devlog 040 에서 철회됨.** "AWQ/Marlin 커널 유력"
+> 도, "프리즈와 세그폴트는 별개" 도 무효. 아래 ③ 을 볼 것.
+
+## 방금 한 작업 ③ (2026-07-27 오전 — 첫 vmcore 확보, 원인 CPU MCE 확정, devlog 040)
+
+**kdump 가 설치 당일 첫 실전 프리즈를 캡처했다.** 038 에서 고쳐 둔 3-고리가
+실제로 작동했다.
+
+```
+boot -2  07-27 05:06:34 → 09:02:42   ← 5번째 프리즈 (가동 3h56m)
+boot -1  07-27 09:03:28 → 09:03:55   ← 캡처 커널 (27초)
+boot  0  07-27 09:04:45 →            ← 정상 복귀   (총 다운타임 2분 3초)
+
+/var/crash/202607270903/dump.202607270903   427MB   ← 첫 실물, 보존할 것
+```
+
+- **사인**: `Kernel panic - not syncing: Fatal machine check`.
+  `MCi_STATUS=0xb200000000070005` → **UC=1, PCC=1(Processor Context Corrupt),
+  ADDRV=0, MCACOD=0x0005(internal parity), Bank 0 = IFU(명령어 인출 유닛)**.
+  CPU 4, SOCKET 0, `RIP CS=0x33`(유저스페이스 실행 중).
+- **`ADDRV=0` = 연관 메모리 주소 없음 → DRAM 에러가 아니다.**
+  EDAC 도 전 기간 무에러. **DIMM 가설은 배제.**
+- **과열 아님**: 전 부팅 통틀어 스로틀/`temperature above threshold` 0건,
+  Package 47C, max MHz 4500 = i7-7820X 정격(오버클럭 흔적 없음).
+  단 VRM/보드 온도는 `gigabyte-wmi: No temperature sensors usable` 라 관측 불가.
+- **하드웨어 실체**: CPU 가 Xeon 이 아니라 **중고 i7-7820X (소비자용 HEDT)**,
+  보드 X299 AORUS Gaming 3 Pro, **BIOS F1 / 2017-07-04 = 출시 당일 펌웨어**.
+
+**그리고 같은 날 오전 09:50:48 · 09:57:38 에 세그폴트 2회**(사용자가 502 로
+인지, 도커가 자동 재시작). 이때 호스트는 멀쩡. 요청 수로 정규화하니:
+
+| 구간 | 요청 | 세그폴트 | /1k req |
+|---|---|---|---|
+| 06-25 ~ 06-28 | 16,464 | 3 | 0.182 |
+| **07-23 ~ 07-24** | **12,346** | **0** | **0.000** |
+| 07-25 ~ 07-27 | 5,412 | 9 | **1.663 (9.1배)** |
+
+**07-23 은 전 기록 중 가장 바쁜 날(10,217건)인데 크래시 0건.** 그런데 기동
+설정은 40여 회 재시작 내내 완전히 동일하다 —
+`vLLM 0.20.2 / Qwen3-32B-AWQ / quantization=awq_marlin / MarlinLinearKernel`.
+**정적 소프트웨어 버그는 스스로 9배 나빠지지 않는다.**
+
+→ **039 철회 2건**: ① AWQ/Marlin 커널 가설 (설정 불변인데 2차 점프가 있었고,
+MCE 도 설명 못 함) ② 프리즈/세그폴트 분리 (하나의 열화 CPU 가 둘 다 설명).
+039 의 "32B 전환 후 6배" 는 `--enforce-eager` × 레이어수 40→64 로 **호스트
+CPU 명령어량이 급증**한 것으로도 똑같이 설명된다.
+
+- **rasdaemon 도입** (09:16, `active`/`enabled`). CE(정정 가능 MCE) 상시 기록
+  시작. **첫 50분간 `mce_record` 0건** — 관측 기간이 짧아 해석 보류.
+  `ras-mc-ctl --errors` 는 `signal_event` 스키마 불일치로 죽으니
+  `sqlite3 /var/lib/rasdaemon/ras-mc_event.db "select * from mce_record ..."` 로 볼 것.
 
 ## 이전 작업 (2026-07-23 — 드라이버 버전 불일치 복구 + 재발 방지)
 
@@ -453,26 +513,37 @@ PaperMeister 가 60s 타임아웃으로 POST /ocr 이 5건 연속 실패한 인�
   compose 가능)
 - 운영 컴포즈는 prebuilt image 만 참조
 
-### 컨테이너 / 이미지 (운영서버) — 2026-07-27 04:20 확인
+### 컨테이너 / 이미지 (운영서버) — 2026-07-27 10:05 확인
 ```
 SERVICE      IMAGE                         STATUS
-chandra-a    honestjung/ocrserver:0.1.1    Up 9h (healthy, GPU 0)
-chandra-b    honestjung/ocrserver:0.1.1    (profile=ocr, 비활성)
-nginx        nginx:alpine                  Up 9h (nginx.llm.conf)
-wrapper      honestjung/ocrwrapper:0.2.3   Up 9h (WRAPPER_ROLE=ocr, OCR_CONCURRENCY=6)
-llmwrapper   honestjung/ocrwrapper:0.2.3   Up 9h (WRAPPER_ROLE=llm)
-llm          vllm/vllm-openai:latest       Up 8h (healthy, GPU 1, Qwen3-32B-AWQ)
+chandra-a    honestjung/ocrserver:0.1.1    Up 1h (healthy, GPU 0)
+chandra-b    honestjung/ocrserver:0.1.1    Exited (0) 7주 전 (profile=ocr, 비활성)
+nginx        nginx:alpine                  Up 1h (nginx.llm.conf)
+wrapper      honestjung/ocrwrapper:0.2.3   Up 1h (WRAPPER_ROLE=ocr, OCR_CONCURRENCY=6)
+llmwrapper   honestjung/ocrwrapper:0.2.3   Up 1h (WRAPPER_ROLE=llm)
+llm          vllm/vllm-openai:latest       Up 8분 (healthy, GPU 1, Qwen3-32B-AWQ)
 ```
-현재 부팅은 2026-07-26 19:27:49 UTC 시작 (직전 프리즈로부터 자동 복구).
-`llm` 은 07-26 20:05 EngineCore 크래시 후 재시작된 상태 (RestartCount=2).
+현재 부팅은 **2026-07-27 09:04:45 UTC** 시작 (09:02:42 프리즈 → kdump 캡처 →
+자동 복구). `llm` 은 09:57:39 재시작 상태 (**RestartCount=2**, 09:50·09:57
+세그폴트 연속 2회). 재시작 후 200 OK 정상 서빙 중, 생성 ~23 tok/s.
 
 ### 워크로드 현황 (2026-07-27)
 - **OCR: 7주째 유휴.** 마지막 잡 **2026-06-09 07:00**. 큐 0/0.
   누적 7,767건 (done 7,720 / done_with_errors 12 / failed 35).
-  chandra-a 는 GPU0 메모리만 점유, util 0%.
-- **LLM: 사용자가 2026-07-27 ~04:33 에 PaperMeister 중지.** 그 전까지
-  레퍼런스 추출로 하루 ~2,200건 / ~400만 토큰 24/7 가동 (누적 53,281건).
-  중지 후 두 GPU 다 util 0%, GPU1 온도 78→42°C.
+  chandra-a 는 GPU0 메모리만 점유, util 0% / 38°C.
+- **LLM: PaperMeister 재개돼 가동 중** (07-27 하루 803건까지 집계).
+  GPU1 util 100% / 77°C / 226W / 44.5GB.
+- **CPU: Package 47°C** (스로틀 이력 없음). 코어 4·5 가 가장 따뜻.
+
+### RAS / 크래시 포렌식
+- **`/var/crash/202607270903/`** — **첫 실물 vmcore 427MB. 보존 필수.**
+  (`202607270505` sysrq 테스트분은 07-27 에 삭제 완료.)
+- **rasdaemon**: `active`/`enabled` (07-27 09:16~).
+  DB `/var/lib/rasdaemon/ras-mc_event.db` (world-readable).
+  10:05 기준 `mce_record` **0건** (관측 50분).
+  ⚠️ `ras-mc-ctl --errors` 는 `signal_event` 스키마 불일치로 죽음 —
+  sqlite3 직접 조회할 것.
+- **crash 유틸 설치됨**, **dbgsym 은 미확보** (ddebs 에 7.0.0-28 미발행).
 
 ### DB
 - `data/ocrserver.db` — OCR 잡/페이지. wrapper RW. ~1.5GB (jobs 7700+).
@@ -515,52 +586,58 @@ llm          vllm/vllm-openai:latest       Up 8h (healthy, GPU 1, Qwen3-32B-AWQ)
 
 ## 곧 해야 할 작업
 
-이번 세션에서 새로 생긴 항목 (우선순위 순):
+devlog 040 으로 우선순위를 전면 재정렬했다. **문제는 하나 — 열화된 CPU.**
+남은 것은 "실리콘이 죽었나(A)" vs "전압/설정이 부족한가(B)" 의 구분이고,
+B 는 공짜로 고쳐지므로 **BIOS 부터** 한다.
 
-1. **프리즈 재발 감시** — 다음 프리즈 후 `/var/crash` 에 **새 디렉터리**가
-   생겼는지 확인 (`202607270505` 는 sysrq 테스트분이라 무시).
-   - 있으면: `.crash` 의 `VmCoreDmesg` (base64+gzip) 를 풀어 백트레이스
-     확인. 심볼 없이도 함수명+오프셋까지 읽힘.
-   - 없으면: NMI 도 못 뜨는 펌웨어 레벨 정지로 판정 → netconsole /
-     serial console 로깅으로 전환.
-2. **dbgsym 확보 대기** — ddebs 에 7.0.0-28 이 올라오면 설치.
-   `apt-cache policy linux-image-$(uname -r)-dbgsym` 로 주기적 확인
-   (저장소 등록은 완료). 커널이 범프되면 그 버전으로 다시 확인.
-   심층 `crash` 분석이 필요해질 때만 급함.
-### A. 세그폴트 라인 (변수 하나씩 — devlog 039)
-
-3. **⭐ Marlin 커널 배제 테스트 (내일 첫 작업)** — 모델·GPU 그대로 두고
-   양자화 커널만 교체. 지금은 vLLM 이 자동으로 `awq_marlin` 선택
-   (기동 로그 `quantization=awq_marlin` 확인됨).
-   ```yaml
-   # docker-compose.yml 의 llm command 에 추가
-         --quantization awq
+1. **⭐ BIOS F1 → 최신 업데이트 (다음 작업)** — 2017-07-04 출시 당일 펌웨어를
+   9년째 쓰고 있다. Skylake-X 의 AVX-512 전압/오프셋 안정성 수정이 통째로
+   빠져 있어서, **멀쩡한 CPU 가 잘못된 전압으로 돌고 있을 가능성**이 있다.
+   - 보드: X299 AORUS Gaming 3 Pro-CF (Gigabyte 지원 페이지에서 F-최신 확보)
+   - ⚠️ 중고 보드 + 운영 박스 → **부팅 불가 리스크 있음. 사용자 결정 필요.**
+   - 올린 뒤 BIOS 설정은 전부 stock/auto 로 두고 (수동 OC·전압 오프셋 금지)
+     최소 하루 관찰.
+   - 이후에도 MCE 가 뜨면 → 실리콘 열화 확정 → 4번.
+2. **CE 스트림 관측** — rasdaemon 이 하루 이상 돌게 두고 확인.
+   ```bash
+   sqlite3 -header /var/lib/rasdaemon/ras-mc_event.db \
+     "select * from mce_record order by id desc limit 20;"
    ```
-   기대 크래시 간격이 **6.8 엔진가동시간**이라 하루면 판정.
-   - 멎음 → Marlin 커널 확정
-   - 그대로 → 4번으로
-   - ⚠️ 기동 로그의 `quantization=` 값을 반드시 확인 (미지원이면 기동 실패
-     하거나 조용히 marlin 으로 되돌아갈 수 있음). 일반 awq 는 더 느림.
-4. **14B fp16 롤백 테스트** — 033 실측상 32B-AWQ 대비 9% 느릴 뿐이라 비용 작음.
-   멎으면 "양자화 경로" 로 범위 확정. `hf_cache` 에 14B 잔존 여부 먼저 확인.
-5. **GPU 스왑** — 3·4 로도 안 좁혀질 때. `llm` 의 `device_ids: ['1']`→`['0']`.
-   증거 6 에서 GPU1 가설이 가장 약해져 우선순위 내림.
-   ⚠️ chandra-a 와 GPU0 공유 시 VRAM 부족(42.8G+44.5G > 48G) → chandra-a 를
-   잠시 내릴 것. OCR 은 어차피 유휴.
+   CPU 뱅크 CE 가 쌓이면 하드웨어 확정. (07-27 10:05 기준 0건, 관측 50분.)
+3. **다음 vmcore 대기** — `/var/crash` 에 새 디렉터리 확인.
+   `202607270903` 은 **첫 실물이니 보존**. 2회차도 **Bank 0 IFU** 면 사실상
+   확정, 다른 뱅크면 재검토.
+   - `.crash` 의 `VmCoreDmesg` 는 base64+gzip 이고 **각 줄이 독립 base64
+     블록**이다. 줄별로 디코드해 이어붙인 뒤 gunzip 할 것.
+4. **CPU 교체 검토** — 1~3 이 실리콘 열화를 가리키면 결국 이것.
+   LGA2066 소켓. 중고 아닌 물건이거나, 이 워크로드(24/7 vLLM)에 맞는
+   다른 구성으로 갈지 판단.
+5. **완화책 (원인 규명 아님, 급하면)** — `--enforce-eager` 를 빼거나
+   14B fp16 으로 롤백하면 호스트 CPU 명령어량이 줄어 크래시 빈도는
+   내려갈 것으로 예상. **결함 CPU 를 덮는 것뿐이라는 점을 명확히 할 것.**
 
-### B. 프리즈 라인 (devlog 038)
+### 취소된 항목 (devlog 040 §6)
 
-6. **다음 프리즈의 vmcore 대기** — 위 1번과 동일. kdump 는 준비 완료.
-7. **DIMM 재장착 / 슬롯 교체** — 케이스 열 일이 생기면. C0 접점 청소 후
-   재장착 → 미인식이면 슬롯 바꿔 꽂아 스틱/슬롯 판별.
-8. **BIOS 업데이트 검토** — F1(2017) 은 출시 초기 펌웨어. 메모리 트레이닝
-   개선 가능성. 단 중고 보드 + 운영 박스라 위험 대비 이득 판단 필요.
-9. **호스트 메모리 테스트** — non-ECC 라 소프트웨어 테스트뿐.
-   무중단 부분 테스트 `sudo memtester 30G 2` (여유 49GB) 가능하나,
-   **실행 중 vLLM 이 점유한 페이지는 검사 못 하므로 "통과 = 무죄" 아님.**
-   제대로 하려면 memtest86+ 부팅 후 수 시간.
-10. **GPU ECC 활성화 검토** — 가용 VRAM 1~2% 감소로 현재 44.5GB 쓰는 모델이
-    빠듯해질 수 있어 켠 뒤 로딩 확인 필요. GPU 리셋(리부팅) 동반.
+- ~~**Marlin 커널 배제 테스트** (`--quantization awq`)~~ → **취소.**
+  설정이 40여 회 재시작 내내 불변인데 크래시율이 07-25 부터 9배로 뛰었다.
+  정적 커널 버그로는 설명 불가. 실행하지 말 것.
+- ~~**14B fp16 롤백 (판별 목적)**~~ → 위 5번으로 강등 (완화책일 뿐).
+- ~~**GPU 스왑** (`device_ids` 1→0)~~ → 취소. MCE 는 CPU 소켓 0 사건이고
+  GPU 와 무관.
+- ~~**DIMM 재장착 / 슬롯 교체**~~ → 취소. `ADDRV=0` 으로 DRAM 배제.
+  단 `CPU1_DIMM_C0` 미인식 자체는 BIOS 업데이트 후 재확인 가치 있음
+  (메모리 트레이닝 개선으로 4장 다 잡힐 수 있음 — 성능 이슈지 안정성 아님).
+
+### 그 외 (우선순위 낮음)
+
+6. **dbgsym 확보 대기** — ddebs 에 7.0.0-28 미발행 (저장소 등록은 완료).
+   `apt-cache policy linux-image-$(uname -r)-dbgsym` 로 주기 확인.
+   이번 건은 MCE 라 dmesg 만으로 결론이 났으나, **다음 건이 커널 Oops 면
+   심볼이 필요**하다. `crash` 유틸은 설치돼 있음.
+7. **호스트 메모리 테스트** — 우선순위 대폭 하향 (DRAM 배제됨).
+   그래도 완전 무죄는 아니므로 케이스 열 일 있으면 memtest86+ 수 시간.
+8. **GPU ECC 활성화 검토** — 가용 VRAM 1~2% 감소로 현재 44.5GB 쓰는 모델이
+   빠듯해질 수 있어 켠 뒤 로딩 확인 필요. GPU 리셋(리부팅) 동반.
 
 ### C. 기타
 
@@ -608,3 +685,5 @@ _세션 전반 (프리즈 → kdump) — 상태 점검 중 07-26 호스트 프�
 _세션 후반 (EngineCore 세그폴트) — 038 의 EngineCore 크래시를 devlog 039 로 마저 추적. **원본 로그를 직접 읽어보니 038 의 "로그 유실" 은 오진**이었고(로테이션 없음, `docker logs` CLI 가 부분만 반환), 실제로는 **SIGSEGV 10건**이 온전히 남아 있었음. 충돌 지점이 10건 모두 무관 → **메모리 손상 시그니처**. 이어서 "하드웨어는 보드/CPU 교체 이후 계속 동일" 이라는 전제를 반영해 **작업량으로 정규화**하니 결론이 바뀜: 32B-AWQ 는 토큰당·가동시간당으로도 **약 6배** 더 자주 죽고, 정작 **호스트 RAM 은 16.1GB→10.3GB 로 덜 씀** → 호스트 RAM 불량 가설 반증, **AWQ/Marlin 커널이 유력**. 프리즈와 세그폴트는 **별개 문제로 분리**(프리즈는 두 모델 시대 모두, 세그폴트는 32B 시대만). 내일 첫 작업은 GPU 스왑이 아니라 **`--quantization awq` 로 Marlin 배제 테스트**._
 
 _세션 종료: 2026-07-27 — 프리즈(038)와 세그폴트(039) 두 라인을 분리해 정리하고 마감. **프리즈 쪽은 kdump 3-고리 복구 + sysrq 실동작 검증까지 완료**(watchdog 300s), 이제 다음 프리즈의 vmcore 만 기다리면 됨. **세그폴트 쪽은 SIGSEGV 확인 + 작업량 정규화로 AWQ/Marlin 커널을 1순위 용의자로 좁힘**. 오늘 내 오진 2건(로그 유실 / 호스트 RAM 주범)은 devlog 038·039 에 정정 표시로 남김. 커밋 6개, devlog 2편, 메모리 4건. 마감 시점 상태: 컨테이너 5개 정상, git clean, `/var/crash` 비어 있음(테스트분 삭제), PaperMeister 재개돼 GPU1 가동 중, 05:06 재부팅 이후 요청 142건·EngineCore 500 0건. **내일 첫 작업은 `--quantization awq` 로 Marlin 배제 테스트** — 적용 후 기동 로그의 `quantization=` 값이 실제로 바뀌었는지 확인하는 것이 실험 성립 조건._
+
+_2026-07-27 오전 (첫 vmcore → 원인 확정) — 038 에서 고쳐 둔 kdump 가 **설치 당일 09:02 프리즈를 그대로 캡처**. 사인은 **Fatal Machine Check Exception, Bank 0 (IFU), internal parity error, PCC=1** — `ADDRV=0` 이라 **DRAM 이 아니라 CPU 코어 내부** 결함. DIMM 가설 배제, 과열도 로그상 근거 없음(스로틀 0건). 같은 날 오전 세그폴트 2회(09:50·09:57)를 요청 수로 정규화하니 **설정이 40여 회 재시작 내내 완전히 동일한데 크래시율이 07-25 부터 9.1배** — 특히 **07-23 은 전 기록 최다 요청(10,217건)인데 크래시 0건**. 정적 소프트웨어 버그로는 불가능한 변화라 **039 의 AWQ/Marlin 가설과 프리즈/세그폴트 분리를 둘 다 철회**하고, **열화된 CPU 하나로 두 증상을 통합 설명**하는 것으로 결론. 하드웨어 실체가 중고 **i7-7820X (Xeon 아님, 소비자용 HEDT)** + **BIOS F1/2017 출시 당일 펌웨어**라는 점이 이 결론과 부합. rasdaemon 도입해 CE 상시 기록 시작. devlog 040. **다음 작업은 BIOS 업데이트** — 남은 분기가 "실리콘 열화(A)" vs "전압/설정 부족(B)" 이고 B 는 BIOS 로 공짜 해결되므로 먼저 시도, 그래도 MCE 가 뜨면 A 확정 → CPU 교체. `--quantization awq` 실험은 **취소**._
