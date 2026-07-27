@@ -49,9 +49,31 @@
   안 떠서 vmcore 없이 리셋됨. 07-26 프리즈가 어느 쪽인지는 **아직 미상**
   (양쪽 다 무로그). 다음 프리즈 후 `/var/crash` 가 비었으면 후자로 판정하고
   netconsole / serial console 로 넘어갈 것.
-- **미검증**: sysrq 로 의도적 panic 을 내는 end-to-end 테스트는 미수행.
-  (테스트 전 `sudo sysctl -w kernel.sysrq=1` 필요 — 현재 176 이라 crash
-  비트 0x40 꺼짐.)
+- **✅ end-to-end 검증 통과** (05:04, OCR/LLM 유휴 시점에 sysrq 강제 panic):
+  - `/var/crash/202607270505/` 에 **vmcore 449M** + dmesg 158K 확보.
+    `file(1)` 이 "Flattened kdump compressed dump v6" 로 정상 인식.
+  - 백트레이스 그대로: `write_sysrq_trigger → __handle_sysrq →
+    sysrq_handle_crash → panic → vpanic`
+  - 타임라인: panic 05:04:03 → 캡처커널 부팅완료 05:05:14(**71초**) →
+    덤프완료 05:05:43(**29초**) → 정상부팅 05:06:34. **총 2분 31초.**
+  - 재부팅 후 kdump 자동 재무장, 컨테이너 5개 자동 복귀 확인.
+- **⚠️ 검증에서 드러난 마진 부족 → watchdog 180s→300s 재상향 (적용 완료)**:
+  panic~덤프완료가 **100초**인데 (캡처 커널 단일 CPU 부팅에만 71초),
+  systemd 는 timeout/2 주기로 ping 하므로 프리즈 시 잔여가 90~180초
+  균등분포 → **약 11% 확률로 덤프가 잘림**. 300s 로 올려 잔여 150~300초
+  확보. 검증: `/sys/class/watchdog/watchdog0/timeout` = **300**.
+  교훈: **캡처 커널 부팅 시간이 덤프 시간보다 길다** — 타임아웃 산정 시
+  덤프 시간만 계산하면 부족.
+- **⚠️ 미해결 — 커널 디버그 심볼 없음**: `crash` 는 설치돼 있으나
+  **ddebs 에 7.0.0-28 이 없음** (보유: -14 / -15 / -22 / -26 뿐, apt 로 재확인).
+  ddebs 저장소는 등록해 둠 (`/etc/apt/sources.list.d/ddebs.sources` +
+  `ubuntu-dbgsym-keyring`) — -28 이 올라오거나 다음 커널 범프 때 자동 인식.
+  **단 이게 프리즈 대기를 막지는 않음**: 커널이 kallsyms 로 백트레이스를
+  이미 심볼화해서 dmesg 에 찍으므로(위 sysrq 결과가 증거) 원인 규명에는
+  대개 충분하고, vmcore 는 나중에 심볼 구해서 분석 가능.
+- makedumpfile 이 커널 7.0.0 미지원 경고 출력
+  (`The kernel version is not supported`). 덤프는 유효하게 나왔으나
+  `-d 31` 페이지 필터링이 최적 아닐 수 있음.
 
 ## 이전 작업 (2026-07-23 — 드라이버 버전 불일치 복구 + 재발 방지)
 
@@ -377,18 +399,23 @@ llm          vllm/vllm-openai:latest       Up 8h (healthy, GPU 1, Qwen3-32B-AWQ)
 
 ### 호스트 보호 / 메트릭
 - **하드웨어 watchdog: 활성** — `wdat_wdt`, `/dev/watchdog0`.
-  **timeout 180s** (2026-07-27 에 10s → 180s 상향, kdump 덤프 시간 확보용).
-  systemd 가 절반 주기로 ping.
+  **timeout 300s** (2026-07-27 에 10s → 180s → 300s. kdump 덤프 시간 확보용,
+  sysrq 검증에서 100초 필요 확인 후 재상향). systemd 가 절반 주기로 ping.
   - ⚠️ **`bootstatus` 는 이 보드에서 신뢰 불가** — 07-26 리셋 4회 후에도
     계속 `0`. 트립 판정은 `journalctl --list-boots` + 각 부팅 마지막 줄로.
   - **2026-07-23 변경**: 로드 방식이 `/etc/modules-load.d/watchdog.conf`
     → oneshot `wdat-watchdog-load.service` (by-name modprobe, 커널
     denylist 우회). 커널 범프 시 재발 방지. 상세는 devlog 037.
-- **kdump: 활성** (2026-07-27 신규, devlog 038) — 프리즈 시 vmcore 확보용.
-  `USE_KDUMP=1`, `hardlockup_panic=1`, watchdog 180s 세 개가 **세트로**
-  있어야 동작. 덤프 위치 `/var/crash` (최대 5개).
+- **kdump: 활성 + 실동작 검증 완료** (2026-07-27 신규, devlog 038).
+  `USE_KDUMP=1`, `hardlockup_panic=1`, watchdog 300s 세 개가 **세트로**
+  있어야 동작. 덤프 위치 `/var/crash` (`KDUMP_NUM_DUMPS=5`).
   검증: `cat /sys/kernel/kexec_crash_loaded` → **1** 이어야 함
   (`systemctl status kdump-tools` 는 꺼져 있어도 정상처럼 보이니 쓰지 말 것).
+  - 실측 소요: panic → vmcore 저장완료 **100초**, 총 다운타임 2분 31초.
+  - `/var/crash/202607270505/` 에 sysrq 테스트 vmcore 449M 보관 중
+    (검증용 — 디스크 정리 시 삭제 가능).
+  - 커널 디버그 심볼(dbgsym)은 **아직 없음** — ddebs 에 7.0.0-28 미발행.
+    ddebs 저장소는 등록해 둠. 심볼 없이도 dmesg 백트레이스는 심볼화돼 읽힘.
 - `ocrserver-metrics.timer` 활성, 1분 주기 → `/srv/ocrserver/data/metrics.db`
 - `ocrserver-gpu-power-limit.service` 활성 — 두 RTX 8000 power limit
   230W 를 boot 마다 자동 적용 (025 에서 설치, 이번 reboot 에 첫 자동
@@ -406,13 +433,16 @@ llm          vllm/vllm-openai:latest       Up 8h (healthy, GPU 1, Qwen3-32B-AWQ)
 
 이번 세션에서 새로 생긴 항목 (우선순위 순):
 
-1. **kdump end-to-end 검증** — 설정만 맞고 실전에서 안 잡히는 경우가 흔함.
-   유휴 시점에 `sudo sysctl -w kernel.sysrq=1` 후
-   `echo c | sudo tee /proc/sysrq-trigger` → 재부팅 후 `/var/crash` 확인.
-   (박스 재부팅 동반. 2026-07-27 현재 OCR/LLM 둘 다 유휴라 창은 열려 있음.)
-2. **프리즈 재발 감시** — 다음 프리즈 후 `/var/crash` 확인.
-   비어 있으면 NMI 도 못 뜨는 펌웨어 레벨 정지로 판정 → netconsole /
-   serial console 로깅으로 전환.
+1. **프리즈 재발 감시** — 다음 프리즈 후 `/var/crash` 에 **새 디렉터리**가
+   생겼는지 확인 (`202607270505` 는 sysrq 테스트분이라 무시).
+   - 있으면: `.crash` 의 `VmCoreDmesg` (base64+gzip) 를 풀어 백트레이스
+     확인. 심볼 없이도 함수명+오프셋까지 읽힘.
+   - 없으면: NMI 도 못 뜨는 펌웨어 레벨 정지로 판정 → netconsole /
+     serial console 로깅으로 전환.
+2. **dbgsym 확보 대기** — ddebs 에 7.0.0-28 이 올라오면 설치.
+   `apt-cache policy linux-image-$(uname -r)-dbgsym` 로 주기적 확인
+   (저장소 등록은 완료). 커널이 범프되면 그 버전으로 다시 확인.
+   심층 `crash` 분석이 필요해질 때만 급함.
 3. **docker 로그 로테이션 명시** — `/etc/docker/daemon.json` 에
    `max-size`/`max-file` 없음. 이번에 vLLM 크래시 시점 로그가 통째로
    유실됨. 최소 며칠치는 남게 설정.
@@ -454,4 +484,4 @@ lifespan resume sync read, 잡 fair 스케줄링, fitz.open 중복 등).
 
 ---
 
-_세션 종료: 2026-07-27 — 상태 점검 중 07-26 호스트 프리즈 4회 발견(watchdog 이 매번 자동 복구해서 은폐돼 있었음). 죽을 때 로그는 4번 다 무증상(panic/Xid/MCE 전무). 원인 규명이 막힌 근본 이유가 vmcore 체인 3군데 단절(`USE_KDUMP=0` + `hardlockup_panic=0` + watchdog 10s < 락업 판정 20s)임을 확인하고 셋 다 수정 → `ready to kdump` 검증. 커널 범프 내성도 확인(037 함정 해당 없음). watchdog 메모리 2건 정정(timeout 변경 가능, bootstatus 신뢰 불가). devlog 038. **근본 원인은 여전히 미상 — 다음 프리즈의 vmcore 가 관건.** sysrq end-to-end 테스트 미수행. PaperMeister 중지로 07-27 04:33 이후 OCR/LLM 둘 다 유휴._
+_세션 종료: 2026-07-27 — 상태 점검 중 07-26 호스트 프리즈 4회 발견(watchdog 이 매번 자동 복구해서 은폐돼 있었음). 죽을 때 로그는 4번 다 무증상(panic/Xid/MCE 전무). 원인 규명이 막힌 근본 이유가 vmcore 체인 3군데 단절(`USE_KDUMP=0` + `hardlockup_panic=0` + watchdog 10s < 락업 판정 20s)임을 확인하고 셋 다 수정. **sysrq 강제 panic 으로 end-to-end 검증 통과 — vmcore 449M 확보, 총 다운타임 2분 31초.** 검증 중 마진 부족(캡처커널 부팅 71초 + 덤프 29초 = 100초 vs watchdog 잔여 90~180초)이 드러나 watchdog 을 300s 로 재상향. 커널 범프 내성 확인(037 함정 해당 없음). watchdog 메모리 2건 정정(timeout 변경 가능, bootstatus 신뢰 불가). devlog 038. **근본 원인은 여전히 미상 — 다음 프리즈의 vmcore 가 관건.** 남은 것은 dbgsym(ddebs 에 7.0.0-28 미발행, 저장소만 등록). PaperMeister 중지로 07-27 04:33 이후 OCR/LLM 둘 다 유휴._

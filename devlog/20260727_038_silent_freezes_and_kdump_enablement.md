@@ -2,6 +2,7 @@
 
 날짜: 2026-07-27
 태그: 인시던트 발견 + forensic 인프라 구축 (근본 원인 미상, 다음 프리즈에서 vmcore 확보 목표)
+검증: sysrq 강제 panic 으로 end-to-end **통과** (vmcore 449M 확보) — 아래 참조
 
 ## 요약
 
@@ -188,7 +189,7 @@ sudo sysctl --system
 # ── 3. HW watchdog 타임아웃 확대 (덤프 시간 확보) ────────
 sudo tee /etc/systemd/system.conf.d/watchdog.conf >/dev/null <<'EOF'
 [Manager]
-RuntimeWatchdogSec=180s
+RuntimeWatchdogSec=300s        # 최초 180s → sysrq 검증 후 300s 로 재상향
 RebootWatchdogSec=10min
 EOF
 sudo systemctl daemon-reexec
@@ -244,19 +245,111 @@ netconsole 또는 serial console 로깅으로 넘어갈 것.
 
 ## 비용
 
-- freeze 자동복구 시간이 10초 → 최대 180초로 늘어남. 실측 복구가
-  70~100초(대부분 POST/부팅)였으니 체감은 ~1.5분 → 최대 4.5분.
+- freeze 자동복구 시간이 10초 → **최대 300초**로 늘어남 (180s 로 올렸다가
+  sysrq 검증에서 마진 부족이 드러나 재상향). 실측 프리즈 복구가
+  70~100초(대부분 POST/부팅)였으니 체감은 ~1.5분 → 최대 6분 정도.
   OCR 이 유휴고 LLM 은 배치라 감수 가능하다고 판단.
 - `/var/crash` 는 루트 파티션(83% 사용, 59GB 여유). 압축 덤프 수백 MB~2GB
   예상, `KDUMP_NUM_DUMPS=5` 로 상한.
 
-## 미검증 항목
+## end-to-end 검증 (sysrq 강제 panic) — **통과**
 
-**end-to-end 실동작 테스트 미수행.** `echo c | sudo tee /proc/sysrq-trigger`
-로 의도적 panic 을 내면 vmcore 가 실제로 떨어지는지, 180초 안에 덤프가
-끝나는지 확인 가능하나, 박스가 재부팅되고 PaperMeister 배치가 끊기므로
-한가한 시점으로 보류. 참고로 현재 `kernel.sysrq = 176` 이라 crash 비트
-(0x40)가 꺼져 있어 테스트 전 `sudo sysctl -w kernel.sysrq=1` 필요.
+PaperMeister 중지로 OCR/LLM 둘 다 유휴가 된 시점(05:04)에 실제로 panic 을
+일으켜 전 체인을 검증. `kernel.sysrq=176` 은 crash 비트(0x40)가 꺼져 있어
+테스트 직전에 `sysctl -w kernel.sysrq=1` 로 일시 활성화 (재부팅 시
+sysctl.d 값 176 으로 자동 복귀 — 되돌릴 필요 없음).
+
+```bash
+sudo sysctl -w kernel.sysrq=1
+echo c | sudo tee /proc/sysrq-trigger
+```
+
+### 산출물
+
+```
+/var/crash/202607270505/
+  dump.202607270505    449M   Flattened kdump compressed dump v6 (file(1) 정상 인식)
+  dmesg.202607270505   158K
+/var/crash/linux-image-7.0.0-28-generic-202607270505.crash   45K  (apport, dmesg 내장)
+```
+
+`.crash` 의 `VmCoreDmesg` (base64+gzip, 1761줄) 를 풀면 의도한 경로가 그대로:
+
+```
+write_sysrq_trigger → __handle_sysrq → sysrq_handle_crash → panic → vpanic
+```
+
+### 타임라인 — 총 다운타임 2분 31초
+
+| 시각 | 사건 | 소요 |
+|---|---|---|
+| 05:04:03 | panic (직전 부팅 마지막 로그) | |
+| 05:05:14 | 캡처 커널 부팅 완료 (`nr_cpus=1 irqpoll reset_devices`) | **71s** |
+| 05:05:43 | `makedumpfile -c -d 31` 완료, vmcore 저장 | **29s** |
+| 05:06:34 | 정상 부팅 | 51s |
+
+재부팅 후 kdump 가 **자동 재무장**됨 (`kexec_crash_loaded=1`,
+`timeout=180`, `hardlockup_panic=1`, `ready to kdump`). 컨테이너 5개는
+`unless-stopped` 정책으로 전부 자동 복귀.
+
+### ⚠️ 발견 — watchdog 마진이 얇았음 → 300s 로 재상향
+
+panic 부터 덤프 완료까지 **100초** 소요. 사전 추정(65~95초)보다 길고,
+특히 **캡처 커널 부팅에만 71초**가 들어감 (`nr_cpus=1` 단일 CPU 부팅).
+
+문제는 systemd 가 `timeout/2` 주기로 ping 한다는 점 — 프리즈 시점의
+watchdog 잔여 시간은 **90~180초 균등분포**. 덤프에 100초가 필요하므로
+잔여 90~100초 구간에 걸리면 덤프 중간에 리셋되어 `dump-incomplete`.
+확률 대략 **(100−90)/90 ≈ 11%**.
+
+이번 테스트는 통과했지만 정작 잡아야 할 실제 프리즈를 1/9 확률로 놓치는
+구조라 **`RuntimeWatchdogSec=180s → 300s` 로 재상향** (잔여 150~300초 확보).
+대가는 프리즈 자동복구 최악 시간이 3분 → 5분.
+
+**교훈: 캡처 커널 부팅 시간(단일 CPU)이 덤프 시간보다 오래 걸린다.**
+watchdog 타임아웃을 잡을 때 덤프 시간만 계산하면 부족하다.
+
+## ⚠️ 미해결 — 커널 디버그 심볼 없음 (vmcore 심층 분석 불가)
+
+`crash` 는 설치돼 있으나 `linux-image-7.0.0-28-generic-dbgsym` 이 없고,
+**ddebs 저장소에 현재 커널이 아예 없음** (2026-07-27 확인):
+
+| suite | 보유 generic 커널 dbgsym |
+|---|---|
+| `resolute` | 7.0.0-14 |
+| `resolute-updates` | 7.0.0-15, 7.0.0-22 |
+| `resolute-proposed` | 7.0.0-26 |
+| `resolute-security` / `-backports` | suite 자체가 404 |
+
+실행 중인 **7.0.0-28 은 어느 suite 에도 없음**. ddebs 발행 지연으로 보임
+(커널 -28 은 07-21 설치). `/boot/System.map-7.0.0-28-generic` 은 있으나
+`crash` 는 DWARF 가 있는 vmlinux 를 요구하므로 대체 불가.
+
+**다만 이게 치명적이지는 않음** — 위 sysrq 테스트에서 확인했듯 커널은
+자체 kallsyms 로 백트레이스를 **이미 심볼화해서** dmesg 에 찍는다.
+즉 dbgsym 없이도 `sysrq_handle_crash+0x1a/0x20` 수준의 함수명+오프셋
+백트레이스는 그대로 읽힌다. 프리즈 원인 규명에는 보통 이걸로 충분.
+dbgsym 이 필요한 건 `crash` 로 task_struct 순회·per-CPU 상태 조사 같은
+심층 분석 단계.
+
+**중요: vmcore 는 지금 떠도 나중에 심볼을 구해서 분석할 수 있다.**
+따라서 dbgsym 부재가 프리즈 대기를 막지 않음. ddebs 저장소만 미리 등록해
+두고 (-28 이 올라오거나 다음 커널 범프 때 자동으로 잡히도록) 대기.
+
+### makedumpfile 커널 미지원 경고
+
+덤프 중 아래 경고 출력:
+
+```
+The kernel version is not supported.
+The makedumpfile operation may be incomplete.
+```
+
+makedumpfile 이 커널 7.0.0 을 모름. 덤프 자체는 유효하게 나왔고
+(`file(1)` 이 v6 형식으로 정상 인식, dmesg 추출 성공) 449M 로 필터링도
+어느 정도 된 것으로 보이나, `-d 31` 페이지 제외가 최적으로 동작하지
+않아 덤프가 필요 이상으로 크거나 느릴 가능성 있음. 실사용에 지장은
+없으나 인지해 둘 것.
 
 ## 그 외 발견 (미처리)
 
