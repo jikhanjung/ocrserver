@@ -1,4 +1,7 @@
-# HANDOFF — 2026-07-27 (무증상 프리즈 4회 발견 → kdump 활성화)
+# HANDOFF — 2026-07-27 (프리즈 4회 → kdump 활성화 + EngineCore 세그폴트 추적)
+
+> **내일 첫 작업: GPU 스왑 실험** (아래 "곧 해야 할 작업" 3번).
+> 오늘은 현 구성 그대로 하루 관찰 중 — 07-27 05:06 재부팅 이후 카운트.
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
@@ -19,7 +22,7 @@
 - **동시간대 vLLM EngineCore 크래시 9회** (03:15~20:05). 컨테이너
   RestartCount=2, restart 정책으로 자력 복구. 프리즈와 **인과 미확정** —
   크래시→프리즈 3건, 크래시만 3건, 프리즈만 1건으로 선후 불일정.
-  크래시 시점 vllm 로그는 logrotate 로 이미 유실.
+  → 이 건은 같은 날 **devlog 039** 로 따로 파고들었음 (아래 참조).
 - **핵심 발견 — vmcore 체인이 3군데 다 끊겨 있었음** (그래서 026 이후
   지금까지 원인 규명이 계속 막혔던 것):
   1. `USE_KDUMP=0` (Ubuntu 기본값) → `kexec_crash_loaded=0`.
@@ -74,6 +77,58 @@
 - makedumpfile 이 커널 7.0.0 미지원 경고 출력
   (`The kernel version is not supported`). 덤프는 유효하게 나왔으나
   `-d 31` 페이지 필터링이 최적 아닐 수 있음.
+
+## 방금 한 작업 ② (2026-07-27 — EngineCore 세그폴트 추적, devlog 039)
+
+038 의 "EngineCore 크래시 9회" 를 마저 판 것. 세부
+`devlog/20260727_039_enginecore_segfault_memory_corruption.md`.
+
+- **먼저 038 오진 정정**: "크래시 로그가 logrotate 로 유실" 은 **틀렸음**.
+  로그는 단일 `json.log` 37.6MB 에 06-24~07-27 **195,954줄 전부 온전**.
+  로테이션 설정 자체가 없었음. 진짜 원인은 **`docker logs` CLI 가 같은
+  파일에서 매번 다른 부분만 반환**한 것 (전체=06-24~06-25 /
+  `--tail 100000`=07-11~07-23 / `--since` 07-26=0줄, 0.08초 즉시 반환).
+  **`docker logs` 를 로그 유무 판정에 쓰지 말 것.** 원본 직접 읽기:
+  ```bash
+  CID=$(docker inspect ocrserver-llm-1 --format '{{.Id}}')
+  docker run --rm -v /var/lib/docker/containers:/c:ro nginx:alpine \
+    cat /c/$CID/$CID-json.log > llm_raw.jsonl
+  ```
+- **확인된 사실**: EngineCore 는 **SIGSEGV** 로 죽고 있음
+  (`!!!!!!! Segfault encountered !!!!!!!`). 33일치 로그에서 **10건**.
+- **결정적 소견 — 메모리 손상 시그니처**: 10건의 충돌 지점이 **전부 다름**.
+  참조카운트(`Py_DECREF`/`subtype_dealloc`), 모듈 임포트
+  (`import_ensure_initialized`), **에러 문자열 포맷**(`_PyErr_FormatV`),
+  torch 디스패치(`c10::Dispatcher::callBoxed`), 텐서 해제
+  (`THPVariable_clear`) 등 서로 무관한 곳. `Py_INCREF`/`Py_TYPE` 반복 등장
+  = 포인터 역참조 중 사망. **코드 버그면 같은 자리에서 반복해 죽는다** —
+  사방에서 죽는 건 메모리 손상 패턴.
+- **두 번째 실패 유형**: 07-26 04:13:31 은 세그폴트가 아니라 C++ 예외 —
+  `c10::Error: self->cdata.use_count() == 1 INTERNAL ASSERT FAILED at
+  python_variable.cpp:3623` (`THPVariable_clear`). 이것도 refcount 무결성
+  실패라 같은 영역을 가리킴.
+- **입력과 무관**: 500 유발 요청 크기(1,893~4,351자)가 정상 분포
+  (p50 2,783 / p90 4,693 / max 10,601) 안에 완전히 들어감. 확률적 발생.
+- **모델 교체와 강한 상관** (같은 GPU 에서의 자연 실험):
+  | 기간 | 모델 | 요청 | 500 | 비율 |
+  |---|---|---|---|---|
+  | ~06-24 | Qwen3-14B fp16 | 8,901 | 1 | 1/8,901 |
+  | 06-24~ | Qwen3-32B-AWQ | 44,449 | 39 | 1/1,140 |
+
+  **약 8배 상승.** 첫 세그폴트 06-25 16:10, 모델 교체 06-24. 이 기간
+  GPU·이미지(05-08 생성분 불변)·워크로드 모두 동일.
+- **Chandra 비교는 무효**: OCR 이 06-09 부터 7주째 유휴라 chandra 는 일을
+  안 하고 있음(비교군 불가). 게다가 **chandra 도 vLLM**(0.21.0). 현 구성상
+  "vLLM vs Chandra" 와 "GPU1 vs GPU0" 가 완전히 교락돼 관측만으론 분리 불가.
+- **관측 사각지대 2곳 확인**:
+  - **호스트 RAM non-ECC 확정** — `dmidecode`: `Error Correction Type: None`.
+    Samsung M378A4G43MB1-CTD 32GB ×3 (A0/B0/D0, C채널 공석 = 비대칭 구성).
+    EDAC 미노출 → 비트 플립이 어디에도 안 찍힘.
+  - **GPU ECC 두 장 다 Disabled** → ECC 카운터 전부 `[N/A]`.
+  - Xid 0건, NVLink 에러 0, CUDA 에러/OOM 없음.
+- **원인 미확정, 후보 3개**: ①호스트 RAM 불량(프리즈까지 설명하나 8배 급증
+  설명 약함) ②AWQ/torch 네이티브 경로의 메모리 손상 버그(8배는 설명하나
+  프리즈 설명 못함) ③GPU1 하드웨어(같은 GPU 에서 1→39 라 약함).
 
 ## 이전 작업 (2026-07-23 — 드라이버 버전 불일치 복구 + 재발 방지)
 
@@ -445,11 +500,22 @@ llm          vllm/vllm-openai:latest       Up 8h (healthy, GPU 1, Qwen3-32B-AWQ)
    `apt-cache policy linux-image-$(uname -r)-dbgsym` 로 주기적 확인
    (저장소 등록은 완료). 커널이 범프되면 그 버전으로 다시 확인.
    심층 `crash` 분석이 필요해질 때만 급함.
-3. **docker 로그 로테이션 명시** — `/etc/docker/daemon.json` 에
-   `max-size`/`max-file` 없음. 이번에 vLLM 크래시 시점 로그가 통째로
-   유실됨. 최소 며칠치는 남게 설정.
-4. **vLLM EngineCore 크래시 원인 추적** — 07-26 에 9회. 로그가 남기
-   시작하면 재조사. 프리즈와의 인과 미확정.
+3. **⭐ GPU 스왑 실험 (내일 예정)** — devlog 039 의 교락을 푸는 유일한 방법.
+   `docker-compose.yml` 의 `llm` 서비스 `device_ids: ['1']` → `['0']`.
+   크래시율 ~9건/일이라 **하루면 판정**:
+   - GPU0 에서도 계속 죽음 → GPU1 하드웨어 배제 → 다음 용의자는 호스트 RAM
+   - GPU0 에서 뚝 끊김 → GPU1 하드웨어 확정
+   - ⚠️ chandra-a 와 GPU0 공유 시 VRAM 부족(42.8G+44.5G > 48G).
+     chandra-a 를 잠시 내리고 할 것. OCR 은 어차피 유휴.
+4. **호스트 메모리 테스트** — 3번에서 GPU 하드웨어가 배제되면 다음 단계.
+   non-ECC 라 소프트웨어 테스트(memtest86+) 외에 방법 없음. 비대칭 3-DIMM
+   구성이라 한 장씩 빼는 절반법도 가능.
+5. **GPU ECC 활성화 검토** — 하드웨어 가설 계량화. 단 가용 VRAM 1~2% 감소로
+   현재 44.5GB 쓰는 모델이 빠듯해질 수 있어 켠 뒤 로딩 확인 필요.
+   GPU 리셋(리부팅) 동반.
+6. **docker 로그 크기 제한은 보류** — `daemon.json` 에 `max-size` 가 없어
+   무한 증가하는 건 맞지만(llm 37.6MB/33일), 지금 켜면 **오래된 크래시
+   로그가 실제로 지워짐**. 조사 끝난 뒤에 설정할 것.
 5. 잔재 정리 (미관/혼동 방지): 부팅 시 `wdat_wdt is deny-listed` 경고
    (037 에서 대체된 옛 modules-load.d 잔재), `wdat-watchdog-load.service`
    의 `Documentation=` 이 URL 이 아니라 부팅마다 `Invalid URL` 3줄.
@@ -462,7 +528,7 @@ lifespan resume sync read, 잡 fair 스케줄링, fitz.open 중복 등).
 ## 참고 위치
 
 - 데브로그: `devlog/20260520_013_*.md` ~
-  `20260727_038_silent_freezes_and_kdump_enablement.md`
+  `20260727_039_enginecore_segfault_memory_corruption.md`
 - 메모리(자동 컨텍스트): `~/.claude/projects/-home-jikhanjung-projects-ocrserver/memory/`
   - `reference_watchdog_setup.md` (2026-07-27 정정: timeout 180s 변경 가능,
     bootstatus 신뢰 불가)
@@ -485,5 +551,7 @@ lifespan resume sync read, 잡 fair 스케줄링, fitz.open 중복 등).
   ```
 
 ---
+
+_추가 (같은 세션 후반) — 038 의 EngineCore 크래시를 devlog 039 로 마저 추적. **원본 로그를 직접 읽어보니 038 의 "로그 유실" 은 오진**이었고(로테이션 없음, `docker logs` CLI 가 부분만 반환), 실제로는 **SIGSEGV 10건**이 온전히 남아 있었음. 충돌 지점이 10건 모두 무관 → **메모리 손상 시그니처**. 모델 교체(14B→32B-AWQ) 후 크래시율 8배. 호스트 RAM **non-ECC 확정**, GPU ECC 도 두 장 다 off → 관측 사각지대 2곳. 원인 미확정, 내일 GPU 스왑으로 교락 해소 예정._
 
 _세션 종료: 2026-07-27 — 상태 점검 중 07-26 호스트 프리즈 4회 발견(watchdog 이 매번 자동 복구해서 은폐돼 있었음). 죽을 때 로그는 4번 다 무증상(panic/Xid/MCE 전무). 원인 규명이 막힌 근본 이유가 vmcore 체인 3군데 단절(`USE_KDUMP=0` + `hardlockup_panic=0` + watchdog 10s < 락업 판정 20s)임을 확인하고 셋 다 수정. **sysrq 강제 panic 으로 end-to-end 검증 통과 — vmcore 449M 확보, 총 다운타임 2분 31초.** 검증 중 마진 부족(캡처커널 부팅 71초 + 덤프 29초 = 100초 vs watchdog 잔여 90~180초)이 드러나 watchdog 을 300s 로 재상향. 커널 범프 내성 확인(037 함정 해당 없음). watchdog 메모리 2건 정정(timeout 변경 가능, bootstatus 신뢰 불가). devlog 038. **근본 원인은 여전히 미상 — 다음 프리즈의 vmcore 가 관건.** 남은 것은 dbgsym(ddebs 에 7.0.0-28 미발행, 저장소만 등록). PaperMeister 중지로 07-27 04:33 이후 OCR/LLM 둘 다 유휴._
