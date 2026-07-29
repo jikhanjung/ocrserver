@@ -1,20 +1,64 @@
-# HANDOFF — 2026-07-27 (프리즈 원인 확정: CPU IFU 패리티 에러)
+# HANDOFF — 2026-07-29 (범인은 코어 5 하나 — 격리 실험 관찰 중)
 
 > **🔴 이 박스가 현재 상태의 전부다.**
-> 07-27 09:02 프리즈를 kdump 가 처음으로 캡처했고, 사인은
-> **Fatal Machine Check Exception — Bank 0 (IFU), internal parity error,
-> PCC=1**. DRAM 이 아니라 **CPU 코어 내부** 결함이다 (`ADDRV=0`).
-> 같은 날 오전 세그폴트 크래시율이 **설정 불변인데 9배**로 뛴 것이 확인돼
-> (devlog 040 §5), **039 의 "AWQ/Marlin 커널" 가설과 "프리즈/세그폴트 분리"
-> 는 둘 다 철회**. 하나의 열화된 CPU 가 두 증상을 모두 낸다는 것이 현재 결론.
+> 07-27 이후 이틀간 호스트가 **12번 더 죽었다**(MTBF 3.8h, 중앙값 1h36m).
+> kdump 12건을 전수 디코드한 결과 전부 동일한
+> **Fatal MCE — Bank 0(IFU), internal parity, PCC=1, ADDRV=0** 이고,
+> **에러 CPU 가 10/12 건 CPU 5, 2건 CPU 4, 나머지 6개 코어는 0건** —
+> 결함이 **물리 코어 5 하나**에 몰려 있다 (devlog 041).
 >
-> **다음 작업: BIOS F1(2017) → 최신 업데이트** (아래 "곧 해야 할 작업" 1번).
+> **⏳ 현재 관찰 중인 실험: 2026-07-29 06:58:33 UTC 부터 코어 4·5 오프라인**
+> (`offline-bad-cores.service`, 16→12스레드). 판정: **12h 무크래시=유의미,
+> 24h=확정**. 다른 코어에서 재발하면 → 다이 전체 열화 → **CPU 교체 확정**.
+>
+> **BIOS 업데이트는 후순위로 연기** — 마이크로코드는 이미 OS 가 최신
+> (`0x2007006`) 을 로드 중이고, 에러가 한 코어에 몰리는 건 전압 문제보다
+> 실리콘 열화 그림이다. 중고 보드 벽돌 리스크를 먼저 질 이유가 없다.
 > `--quantization awq` 실험은 **취소**됐다 — 하지 말 것.
-> `/var/crash/202607270903/` 은 **첫 실물 vmcore, 절대 지우지 말 것.**
+>
+> ⚠️ **서비스가 멀쩡해 보이는 것에 속지 말 것.** 복구가 2분이라 클라이언트
+> 엔 짧은 502 로만 보인다. 판단은 `uptime` + `journalctl --list-boots`.
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-07-27 — 프리즈 4회 발견 + forensic 인프라 구축)
+## 방금 한 작업 (2026-07-29 — MCE 12건 전수 분석 + 코어 격리, devlog 041)
+
+세부 `devlog/20260729_041_mce_localized_to_core5_and_cpu_offlining.md`.
+
+- **발단**: 사용자가 "오늘은 오래 잘 돌고 있네" 라고 했는데 실제 uptime 은
+  2시간이었고 마지막 크래시가 **2시간 전**이었다. 038 에서 겪은
+  "watchdog 이 사고를 은폐한다" 구조가 그대로 반복.
+- **040 이후 크래시 12회** (07-27 09:04 ~ 07-29 04:03).
+  **MTBF 3.8h / 중앙값 1h36m**, 최단 13분. 12건 중 11건 MCE 확인
+  (07-28 15:00 건은 `KDUMP_NUM_DUMPS=5` 로테이션으로 소실).
+- **시그니처 12건 전부 동일**: `Bank 0: b200000000070005`
+  (3건은 `f2…` = **OVER 비트**, 같은 에러 연속 발생 오버플로).
+- **⭐ 코어 국소화**: 에러 CPU 가 **CPU 5 ×10 / CPU 4 ×2 / 나머지 0**.
+  `/proc/cpuinfo` 로 `CPU n → 물리 코어 n`, HT 형제는 `n+8` 확인.
+  로그의 `[ C13 ]` 은 **기록한** CPU, `CPU 5:` 가 **에러 낸** CPU.
+  040 의 "코어 4·5 가 가장 따뜻" 관측과 같은 곳.
+- **부하 무관 입증**: 07-28 04:12 건만 커널 모드(`CS=0x10`)이고 RIP 가
+  `intel_idle_ibrs+0x8d` — **C-state 진입 중에도 죽는다.** 나머지 11건은
+  `CS=0x33` 유저스페이스(vLLM). "LLM 부하/발열 탓" 가설 폐기.
+- **rasdaemon 이틀간 `mce_record` 0건** — CE 가 아예 없고 곧바로 치명적
+  UC 로 간다. → **CE 축적 관측 전략은 무의미** (040 의 백로그 2번 종결).
+- **적용**: `sudo chcpu -d 4,5,12,13` → `0-3,6-11,14-15` (16→12스레드,
+  load 2.0 이라 영향 없음). 06:58:33 UTC 커널 로그로 확인.
+- **영속화가 실험 성립 조건** — `chcpu` 는 재부팅에 안 남는데 이 박스는
+  3.8h 마다 리셋되므로, 놔두면 다음 크래시에 코어가 되살아나 실험이 스스로
+  무효화된다. `/etc/systemd/system/offline-bad-cores.service` (oneshot,
+  `RemainAfterExit`, `ExecStop` 으로 복구) enable 완료.
+  `chcpu -d` 는 이미 오프라인이면 **exit 0** 이라 재실행 안전.
+  커널 cmdline·BIOS 로는 "특정 인덱스만 끄기" 표현 불가 → 유닛이 유일 수단.
+- **판정표** (지수분포, MTBF 3.8h 기준):
+  8h 무크래시=우연 12% / **12h=4%** / **24h=0.1%**.
+  기준 시각은 `uptime` 이 아니라 **06:58:33 UTC**.
+- **부가 — apport `.crash` 에서 dmesg 뽑는 법 확립**: `/var/crash/*.crash`
+  는 **0644 라 sudo 없이 읽힌다**(`dmesg.*` 는 0600). `VmCoreDmesg: base64`
+  는 **줄마다 독립 base64 블록** → 디코드해 이어붙이면 gzip.
+  vmcore 가 로테이션돼도 dmesg 는 남아서, 이번 전수 분석이 이걸로 가능했다.
+
+## 이전 작업 (2026-07-27 — 프리즈 4회 발견 + forensic 인프라 구축)
 
 상태 점검 중 **2026-07-26 하루에 호스트가 4번 freeze** 했고 watchdog 이
 매번 자동 리셋한 것을 발견. 사용자는 인지 못 한 상태였음 (70~100초 만에
@@ -87,7 +131,7 @@
   (`The kernel version is not supported`). 덤프는 유효하게 나왔으나
   `-d 31` 페이지 필터링이 최적 아닐 수 있음.
 
-## 방금 한 작업 ② (2026-07-27 — EngineCore 세그폴트 추적, devlog 039)
+## 이전 작업 ② (2026-07-27 — EngineCore 세그폴트 추적, devlog 039)
 
 038 의 "EngineCore 크래시 9회" 를 마저 판 것. 세부
 `devlog/20260727_039_enginecore_segfault_memory_corruption.md`.
@@ -168,7 +212,7 @@
 > ⚠️ **이 절(②)의 결론은 devlog 040 에서 철회됨.** "AWQ/Marlin 커널 유력"
 > 도, "프리즈와 세그폴트는 별개" 도 무효. 아래 ③ 을 볼 것.
 
-## 방금 한 작업 ③ (2026-07-27 오전 — 첫 vmcore 확보, 원인 CPU MCE 확정, devlog 040)
+## 이전 작업 ③ (2026-07-27 오전 — 첫 vmcore 확보, 원인 CPU MCE 확정, devlog 040)
 
 **kdump 가 설치 당일 첫 실전 프리즈를 캡처했다.** 038 에서 고쳐 둔 3-고리가
 실제로 작동했다.
@@ -513,7 +557,15 @@ PaperMeister 가 60s 타임아웃으로 POST /ocr 이 5건 연속 실패한 인�
   compose 가능)
 - 운영 컴포즈는 prebuilt image 만 참조
 
-### 컨테이너 / 이미지 (운영서버) — 2026-07-27 10:05 확인
+### CPU 상태 (2026-07-29 신규)
+- **코어 4·5 오프라인** — 온라인 CPU `0-3,6-11,14-15` (16→12스레드).
+  `offline-bad-cores.service` (enabled, `active (exited)`) 가 부팅마다 적용.
+  **관찰 시작 2026-07-29 06:58:33 UTC.** 판정 12h/24h.
+  해제: `sudo systemctl disable --now offline-bad-cores.service`
+- CPU 는 중고 **i7-7820X**, BIOS **F1 / 2017-07-04** (미업데이트, 후순위).
+  마이크로코드는 OS 가 `0x2007006` 로드 중 (`intel-microcode` 패키지).
+
+### 컨테이너 / 이미지 (운영서버) — 2026-07-27 10:05 확인 (이후 재부팅 12회)
 ```
 SERVICE      IMAGE                         STATUS
 chandra-a    honestjung/ocrserver:0.1.1    Up 1h (healthy, GPU 0)
@@ -535,12 +587,19 @@ llm          vllm/vllm-openai:latest       Up 8분 (healthy, GPU 1, Qwen3-32B-AW
   GPU1 util 100% / 77°C / 226W / 44.5GB.
 - **CPU: Package 47°C** (스로틀 이력 없음). 코어 4·5 가 가장 따뜻.
 
-### RAS / 크래시 포렌식
-- **`/var/crash/202607270903/`** — **첫 실물 vmcore 427MB. 보존 필수.**
-  (`202607270505` sysrq 테스트분은 07-27 에 삭제 완료.)
+### RAS / 크래시 포렌식 (2026-07-29 갱신)
+- **`/var/crash` 2.1GB** — vmcore 5개(`KDUMP_NUM_DUMPS=5` 상한이라 더 안 늘음)
+  + apport `.crash` 8개. 040 의 첫 vmcore `202607270903` 은 **로테이션으로
+  이미 밀려났다** (dmesg 는 `.crash` 쪽에 남아 있음).
+  현재 보유 vmcore: `202607281901` / `202607290200` / `202607290222` /
+  `202607290330` / `202607290404`.
+- **⭐ `.crash` 는 0644 라 sudo 없이 읽힌다** (`dmesg.*` 는 0600).
+  `VmCoreDmesg: base64` 는 **줄마다 독립 base64 블록** → 줄별 디코드 후
+  이어붙여 gunzip. vmcore 가 지워져도 dmesg 는 이쪽에 남는다.
 - **rasdaemon**: `active`/`enabled` (07-27 09:16~).
   DB `/var/lib/rasdaemon/ras-mc_event.db` (world-readable).
-  10:05 기준 `mce_record` **0건** (관측 50분).
+  **07-29 기준 이틀 관측에도 `mce_record` 0건** — CE 없이 곧바로 치명적
+  UC 로 감. CE 축적을 기다리는 전략은 폐기.
   ⚠️ `ras-mc-ctl --errors` 는 `signal_event` 스키마 불일치로 죽음 —
   sqlite3 직접 조회할 것.
 - **crash 유틸 설치됨**, **dbgsym 은 미확보** (ddebs 에 7.0.0-28 미발행).
@@ -586,35 +645,41 @@ llm          vllm/vllm-openai:latest       Up 8분 (healthy, GPU 1, Qwen3-32B-AW
 
 ## 곧 해야 할 작업
 
-devlog 040 으로 우선순위를 전면 재정렬했다. **문제는 하나 — 열화된 CPU.**
-남은 것은 "실리콘이 죽었나(A)" vs "전압/설정이 부족한가(B)" 의 구분이고,
-B 는 공짜로 고쳐지므로 **BIOS 부터** 한다.
+devlog 041 로 우선순위를 다시 조정했다. **문제는 하나 — 열화된 CPU 코어.**
+지금은 "코어 5 국소 결함인가" vs "다이 전체로 번지는가" 의 구분 단계이고,
+격리 실험이 그 답을 공짜로 준다. **BIOS 는 그 뒤로 밀었다.**
 
-1. **⭐ BIOS F1 → 최신 업데이트 (다음 작업)** — 2017-07-04 출시 당일 펌웨어를
-   9년째 쓰고 있다. Skylake-X 의 AVX-512 전압/오프셋 안정성 수정이 통째로
-   빠져 있어서, **멀쩡한 CPU 가 잘못된 전압으로 돌고 있을 가능성**이 있다.
-   - 보드: X299 AORUS Gaming 3 Pro-CF (Gigabyte 지원 페이지에서 F-최신 확보)
-   - ⚠️ 중고 보드 + 운영 박스 → **부팅 불가 리스크 있음. 사용자 결정 필요.**
-   - 올린 뒤 BIOS 설정은 전부 stock/auto 로 두고 (수동 OC·전압 오프셋 금지)
-     최소 하루 관찰.
-   - 이후에도 MCE 가 뜨면 → 실리콘 열화 확정 → 4번.
-2. **CE 스트림 관측** — rasdaemon 이 하루 이상 돌게 두고 확인.
+1. **⭐ 코어 격리 실험 판정 (다음 작업, 코드 작업 없음)** —
+   기준 시각 **2026-07-29 06:58:33 UTC**부터 무크래시 지속시간을 본다.
    ```bash
-   sqlite3 -header /var/lib/rasdaemon/ras-mc_event.db \
-     "select * from mce_record order by id desc limit 20;"
+   uptime; journalctl --list-boots --no-pager | tail -5
+   ls -la /var/crash/
    ```
-   CPU 뱅크 CE 가 쌓이면 하드웨어 확정. (07-27 10:05 기준 0건, 관측 50분.)
-3. **다음 vmcore 대기** — `/var/crash` 에 새 디렉터리 확인.
-   `202607270903` 은 **첫 실물이니 보존**. 2회차도 **Bank 0 IFU** 면 사실상
-   확정, 다른 뱅크면 재검토.
-   - `.crash` 의 `VmCoreDmesg` 는 base64+gzip 이고 **각 줄이 독립 base64
-     블록**이다. 줄별로 디코드해 이어붙인 뒤 gunzip 할 것.
-4. **CPU 교체 검토** — 1~3 이 실리콘 열화를 가리키면 결국 이것.
+   - **12h 무크래시 = 유의미 (우연 4%)**, **24h = 확정 (0.1%)**.
+   - 새 `/var/crash/2026*` 디렉터리가 생기면 즉시 에러 CPU 확인:
+     **코어 4·5 가 아닌 CPU 면 → 다이 전체 열화 → 2번으로 직행.**
+   - 결과와 무관하게 devlog 041 에 후속 절 추가할 것.
+2. **CPU 교체** — 격리가 안 먹거나 다른 코어에서 재발하면 **유일한 답.**
    LGA2066 소켓. 중고 아닌 물건이거나, 이 워크로드(24/7 vLLM)에 맞는
    다른 구성으로 갈지 판단.
-5. **완화책 (원인 규명 아님, 급하면)** — `--enforce-eager` 를 빼거나
+3. **BIOS F1 → 최신 업데이트 (후순위로 강등)** — 2017-07-04 출시 당일
+   펌웨어지만, **마이크로코드는 이미 OS 가 `0x2007006` 을 로드**하고 있어
+   그 이득은 이미 받는 중이다. 남는 건 VRM/전압 테이블·메모리 트레이닝.
+   에러가 한 코어에 몰리는 것도 전압 부족보다 실리콘 열화 그림.
+   - 보드: X299 AORUS Gaming 3 Pro-CF (Gigabyte 지원 페이지에서 F-최신 확보)
+   - ⚠️ 중고 보드 + 운영 박스 → **부팅 불가 리스크. 사용자 결정 필요.**
+   - 하게 되면 설정은 전부 stock/auto (수동 OC·전압 오프셋 금지) + 하루 관찰.
+   - 부수 이득: `CPU1_DIMM_C0` 미인식이 트레이닝 개선으로 풀릴 수 있음.
+4. **완화책 (원인 규명 아님, 급하면)** — `--enforce-eager` 를 빼거나
    14B fp16 으로 롤백하면 호스트 CPU 명령어량이 줄어 크래시 빈도는
    내려갈 것으로 예상. **결함 CPU 를 덮는 것뿐이라는 점을 명확히 할 것.**
+
+### 종결된 항목 (devlog 041)
+
+- ~~**CE 스트림 관측**~~ → **종결.** rasdaemon 이틀 관측에도 `mce_record`
+  0건. CE 없이 곧바로 UC 로 가는 유형이라 기다려도 안 쌓인다.
+- ~~**2회차 vmcore 로 Bank 0 IFU 확인**~~ → **완료.** 12건 전수가 동일
+  시그니처. 재검토 조건 없음.
 
 ### 취소된 항목 (devlog 040 §6)
 
@@ -656,7 +721,7 @@ lifespan resume sync read, 잡 fair 스케줄링, fitz.open 중복 등).
 ## 참고 위치
 
 - 데브로그: `devlog/20260520_013_*.md` ~
-  `20260727_039_enginecore_segfault_memory_corruption.md`
+  `20260729_041_mce_localized_to_core5_and_cpu_offlining.md`
 - 메모리(자동 컨텍스트): `~/.claude/projects/-home-jikhanjung-projects-ocrserver/memory/`
   - `reference_watchdog_setup.md` (2026-07-27 정정: timeout 180s 변경 가능,
     bootstatus 신뢰 불가)
@@ -675,7 +740,12 @@ lifespan resume sync read, 잡 fair 스케줄링, fitz.open 중복 등).
   # watchdog 상태 (sudo 없이)
   systemctl show | grep -i watchdog
   cat /sys/class/watchdog/watchdog0/state
-  cat /sys/class/watchdog/watchdog0/bootstatus   # 0 = 정상, 그 외 = 트립 흔적
+  # ⚠️ bootstatus 는 이 보드에서 신뢰 불가 (리셋 후에도 계속 0). 아래를 쓸 것:
+  uptime; journalctl --list-boots --no-pager | tail -10
+  # 크래시 원인 (sudo 없이): /var/crash/*.crash 의 VmCoreDmesg 디코드
+  ls -la /var/crash/
+  # CPU 격리 상태
+  cat /sys/devices/system/cpu/online   # 정상값 0-3,6-11,14-15
   ```
 
 ---
@@ -685,5 +755,7 @@ _세션 전반 (프리즈 → kdump) — 상태 점검 중 07-26 호스트 프�
 _세션 후반 (EngineCore 세그폴트) — 038 의 EngineCore 크래시를 devlog 039 로 마저 추적. **원본 로그를 직접 읽어보니 038 의 "로그 유실" 은 오진**이었고(로테이션 없음, `docker logs` CLI 가 부분만 반환), 실제로는 **SIGSEGV 10건**이 온전히 남아 있었음. 충돌 지점이 10건 모두 무관 → **메모리 손상 시그니처**. 이어서 "하드웨어는 보드/CPU 교체 이후 계속 동일" 이라는 전제를 반영해 **작업량으로 정규화**하니 결론이 바뀜: 32B-AWQ 는 토큰당·가동시간당으로도 **약 6배** 더 자주 죽고, 정작 **호스트 RAM 은 16.1GB→10.3GB 로 덜 씀** → 호스트 RAM 불량 가설 반증, **AWQ/Marlin 커널이 유력**. 프리즈와 세그폴트는 **별개 문제로 분리**(프리즈는 두 모델 시대 모두, 세그폴트는 32B 시대만). 내일 첫 작업은 GPU 스왑이 아니라 **`--quantization awq` 로 Marlin 배제 테스트**._
 
 _세션 종료: 2026-07-27 — 프리즈(038)와 세그폴트(039) 두 라인을 분리해 정리하고 마감. **프리즈 쪽은 kdump 3-고리 복구 + sysrq 실동작 검증까지 완료**(watchdog 300s), 이제 다음 프리즈의 vmcore 만 기다리면 됨. **세그폴트 쪽은 SIGSEGV 확인 + 작업량 정규화로 AWQ/Marlin 커널을 1순위 용의자로 좁힘**. 오늘 내 오진 2건(로그 유실 / 호스트 RAM 주범)은 devlog 038·039 에 정정 표시로 남김. 커밋 6개, devlog 2편, 메모리 4건. 마감 시점 상태: 컨테이너 5개 정상, git clean, `/var/crash` 비어 있음(테스트분 삭제), PaperMeister 재개돼 GPU1 가동 중, 05:06 재부팅 이후 요청 142건·EngineCore 500 0건. **내일 첫 작업은 `--quantization awq` 로 Marlin 배제 테스트** — 적용 후 기동 로그의 `quantization=` 값이 실제로 바뀌었는지 확인하는 것이 실험 성립 조건._
+
+_2026-07-29 (코어 국소화 → 격리 실험) — 사용자의 "오늘은 오래 잘 돌고 있네" 로 시작했으나 실제로는 **uptime 2시간, 마지막 크래시 2시간 전**이었고 040 이후 이틀간 **12번 더 죽어 있었다**(MTBF 3.8h). watchdog+kdump 복구가 2분이라 서비스가 멀쩡해 보인 것 — 038 의 은폐 구조 반복. **apport `.crash` 가 0644 라 sudo 없이 읽힌다**는 걸 발견해(줄별 base64 → gunzip) **MCE 12건을 전수 디코드**했고, 전부 동일 `Bank 0 / 0x0005 / PCC=1` 인 데 더해 **에러 CPU 가 10건 CPU 5, 2건 CPU 4, 나머지 6개 코어는 0건** — 결함이 **물리 코어 5 하나**에 국소화됨을 확인. 1건은 커널 `intel_idle_ibrs` 에서 터져 **부하/발열 가설도 폐기**. rasdaemon 은 이틀간 CE 0건이라 CE 관측 전략 종결. → **BIOS 를 후순위로 내리고**(마이크로코드는 이미 OS 가 `0x2007006` 로드 중, 중고 보드 벽돌 리스크 회피) 리스크 0 인 **코어 4·5 오프라인**을 먼저 적용. `chcpu` 가 재부팅에 안 남는데 이 박스는 3.8h 마다 리셋되므로 **영속화가 실험 성립 조건** — `offline-bad-cores.service` 로 고정. devlog 041. **다음 작업은 코드가 아니라 판정: 06:58:33 UTC 기준 12h 무크래시=유의미(4%), 24h=확정(0.1%). 다른 코어에서 재발하면 다이 전체 열화 → CPU 교체 즉시 착수.**_
 
 _2026-07-27 오전 (첫 vmcore → 원인 확정) — 038 에서 고쳐 둔 kdump 가 **설치 당일 09:02 프리즈를 그대로 캡처**. 사인은 **Fatal Machine Check Exception, Bank 0 (IFU), internal parity error, PCC=1** — `ADDRV=0` 이라 **DRAM 이 아니라 CPU 코어 내부** 결함. DIMM 가설 배제, 과열도 로그상 근거 없음(스로틀 0건). 같은 날 오전 세그폴트 2회(09:50·09:57)를 요청 수로 정규화하니 **설정이 40여 회 재시작 내내 완전히 동일한데 크래시율이 07-25 부터 9.1배** — 특히 **07-23 은 전 기록 최다 요청(10,217건)인데 크래시 0건**. 정적 소프트웨어 버그로는 불가능한 변화라 **039 의 AWQ/Marlin 가설과 프리즈/세그폴트 분리를 둘 다 철회**하고, **열화된 CPU 하나로 두 증상을 통합 설명**하는 것으로 결론. 하드웨어 실체가 중고 **i7-7820X (Xeon 아님, 소비자용 HEDT)** + **BIOS F1/2017 출시 당일 펌웨어**라는 점이 이 결론과 부합. rasdaemon 도입해 CE 상시 기록 시작. devlog 040. **다음 작업은 BIOS 업데이트** — 남은 분기가 "실리콘 열화(A)" vs "전압/설정 부족(B)" 이고 B 는 BIOS 로 공짜 해결되므로 먼저 시도, 그래도 MCE 가 뜨면 A 확정 → CPU 교체. `--quantization awq` 실험은 **취소**._
