@@ -91,10 +91,11 @@
       <table class="table table-hover mb-0">
         <thead>
           <tr>
-            <th class="ps-4" style="width:30%">파일명</th>
-            <th style="width:11%">Job ID</th>
-            <th style="width:11%">상태</th>
-            <th style="width:18%">진행</th>
+            <th class="ps-4" style="width:26%">파일명</th>
+            <th style="width:14%">클라이언트</th>
+            <th style="width:9%">Job ID</th>
+            <th style="width:10%">상태</th>
+            <th style="width:16%">진행</th>
             <th style="width:16%">제출 시각</th>
             <th style="width:9%">소요</th>
           </tr>
@@ -207,6 +208,8 @@ async function refresh() {
   } catch(e) { console.error(e); }
 }
 
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
 function renderJobs(jr) {
   const items = jr.items || [];
   document.getElementById('tbody').innerHTML = items.map(j => {
@@ -217,13 +220,14 @@ function renderJobs(jr) {
       : '<span class="text-muted small">—</span>';
     return `<tr data-id="${j.job_id}" ${j.job_id===sel?'class="selected"':''} onclick="selectJob('${j.job_id}')">
       <td class="ps-4" title="${j.filename||''}">${trunc(j.filename||'—', 40)}</td>
+      <td class="small" title="${esc(j.client_id||'')}">${j.client_id ? `<code>${esc(trunc(j.client_id, 24))}</code>` : '<span class="text-muted">—</span>'}</td>
       <td><code>${j.job_id.slice(0,8)}</code></td>
       <td>${badge(j.status)}</td>
       <td>${prog}</td>
       <td class="small text-secondary">${fmt.time(j.submitted_at)}</td>
       <td class="small text-secondary">${fmt.dur(j.submitted_at, j.completed_at)}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan="6" class="text-center text-muted py-4">표시할 작업이 없습니다.</td></tr>';
+  }).join('') || '<tr><td colspan="7" class="text-center text-muted py-4">표시할 작업이 없습니다.</td></tr>';
 }
 
 function renderPagination(jr) {

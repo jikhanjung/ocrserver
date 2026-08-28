@@ -1,4 +1,4 @@
-# HANDOFF — 2026-08-28 (wrapper 0.2.5: 클라이언트 간 GPU 슬롯 공평 분배)
+# HANDOFF — 2026-08-28 (wrapper 0.2.6: 클라이언트 간 GPU 슬롯 공평 분배)
 
 > **🟢 이 박스가 현재 상태의 전부다.**
 > - **호스트**: 코어 4·5 격리(07-29) 이후 **한 달째 MCE 패닉 0건**.
@@ -6,7 +6,7 @@
 >   종료) → 현재. 041 결론 유지. 온라인 CPU `0-3,6-11,14-15`.
 > - **모드**: 오늘 `mode-ocr.sh`로 **OCR×2** (chandra-a + chandra-b,
 >   `OCR_CONCURRENCY=12`, mode chip `2ocr`). `llm` 컨테이너 정지.
-> - **wrapper 0.2.5 배포** (devlog 042): PaperMeister 인스턴스 2개가 동시에
+> - **wrapper 0.2.6 배포** (devlog 042; 0.2.4→0.2.5→0.2.6 같은 날): PaperMeister 인스턴스 2개가 동시에
 >   OCR을 돌리자 FIFO 세마포어 때문에 한쪽이 굶는 문제 → 활성 클라이언트
 >   수로 슬롯을 나누는 `_FairScheduler`. `recommended_concurrency`는 이제
 >   **호출 클라이언트의 몫** (`?client_id=`로 자신을 밝히면 정확), 함께
@@ -14,7 +14,7 @@
 > - ⚠️ **배포 규칙**: wrapper/llmwrapper 재생성은 `up -d --no-deps` +
 >   직후 `nginx -s reload`. 오늘 이걸 안 지켜서 `llm`이 딸려 뜨고 nginx가
 >   옛 wrapper IP를 물어 **502 약 2분** (devlog 042 §5).
-> - 이미지 `honestjung/ocrwrapper:0.2.4`/`0.2.5`는 로컬 빌드만, **Hub 미푸시**.
+> - 이미지 `honestjung/ocrwrapper:0.2.4`~`0.2.6`은 로컬 빌드만, **Hub 미푸시**.
 > - OCR 워크로드 재개됨: 누적 7,823건, 오늘 두 클라이언트 동시 사용.
 
 > **(이전 박스, 2026-07-30 — 참고용으로 남김)**
@@ -72,6 +72,7 @@
 5. 메모리 저장: `project_wrapper_recreate_no_deps_nginx_reload.md`.
 6. **0.2.5**: `recommended_concurrency_new_client` + `client_id` 응답 필드
    (id 없이 불러도 안전한 값을 고를 수 있게). `--no-deps`+reload 배포, 무사고.
+7. **0.2.6**: 대시보드(`/`) job 테이블에 「클라이언트」 열 (`client_id`).
 
 ## 이전 작업 (2026-07-30 00:05 — 격리 17h 결과 확인, devlog 041 §8)
 
@@ -662,12 +663,12 @@ SERVICE      IMAGE                         STATUS
 chandra-a    honestjung/ocrserver:0.1.1    Up (healthy, GPU 0, 42.8GB)
 chandra-b    honestjung/ocrserver:0.1.1    Up (healthy, GPU 1, 42.8GB) — 03:50 기동
 nginx        nginx:alpine                  Up (nginx.ocr.conf, 08:31 reload)
-wrapper      honestjung/ocrwrapper:0.2.5   Up (WRAPPER_ROLE=ocr, OCR_CONCURRENCY=12)
-llmwrapper   honestjung/ocrwrapper:0.2.5   Up (WRAPPER_ROLE=llm; upstream llm 정지라 /llm/* 502)
+wrapper      honestjung/ocrwrapper:0.2.6   Up (WRAPPER_ROLE=ocr, OCR_CONCURRENCY=12)
+llmwrapper   honestjung/ocrwrapper:0.2.6   Up (WRAPPER_ROLE=llm; upstream llm 정지라 /llm/* 502)
 llm          vllm/vllm-openai:latest       Exited (OCR×2 모드)
 ```
 현재 부팅은 **2026-08-28 03:14:43 UTC** 시작 (직전 부팅 정상 종료).
-`ocrwrapper:0.2.5`는 이 호스트 로컬 빌드(Hub 미푸시, 0.2.4도 로컬 보유). 0.2.3으로 되돌리려면
+`ocrwrapper:0.2.6`은 이 호스트 로컬 빌드(Hub 미푸시, 0.2.4/0.2.5도 로컬 보유). 0.2.3으로 되돌리려면
 compose 태그만 바꾸면 됨 (이미지 로컬 보유).
 
 ### 워크로드 현황 (2026-08-28)
@@ -740,8 +741,8 @@ compose 태그만 바꾸면 됨 (이미지 로컬 보유).
 0. **nginx upstream 근본 해결** — `resolver 127.0.0.11 valid=10s;` + 변수
    `proxy_pass`로 wrapper IP 변경 시 자동 재해석. 그 전까지는 재생성 후
    `nginx -s reload` 수동 (메모리·devlog 042 §5).
-0. **`ocrwrapper:0.2.5` Hub 푸시 여부 결정** — 다른 호스트/RunPod에서 쓸
-   일이 생기면 `docker push honestjung/ocrwrapper:0.2.5`.
+0. **`ocrwrapper:0.2.6` Hub 푸시 여부 결정** — 다른 호스트/RunPod에서 쓸
+   일이 생기면 `docker push honestjung/ocrwrapper:0.2.6`.
 0. PaperMeister 쪽에 `GET /api/stats?client_id=<자기 id>`로
    `recommended_concurrency`를 읽도록 알려주기 (id 없이 부르면
    `recommended_concurrency_new_client`를 쓰라고).

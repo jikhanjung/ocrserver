@@ -1,4 +1,4 @@
-# devlog 042 — 클라이언트 간 GPU 슬롯 공평 분배 (wrapper 0.2.4 → 0.2.5)
+# devlog 042 — 클라이언트 간 GPU 슬롯 공평 분배 (wrapper 0.2.4 → 0.2.6)
 
 날짜: 2026-08-28
 태그: wrapper 기능 (스케줄러), 배포 사고 1건 (nginx 502 ~2분), 문서 갱신
@@ -95,6 +95,8 @@ max inflight seen per client: A 12, B 6   (전역 12 초과 0회)
   `client_id`(서버가 받은 id, 없으면 null)를 추가. id 없이 부르면 두 권장값이
   다르게 나와 그 자체가 힌트이고, 제출 전이면 `_new_client`를 쓰면 안전하다.
   id를 주면 둘이 같아진다. 0.2.5 배포는 `--no-deps` + reload로 무사고.
+- **0.2.6** — 대시보드 `/` job 테이블에 「클라이언트」 열. 두 클라이언트가
+  섞여 돌 때 어느 job이 누구 것인지 한눈에 보이도록.
 - `/status` "권장 동시성" → "클라이언트당 권장 동시성 (활성 N, 처리 x /
   대기 y)". `/` 상단 칩 → "OCR 백엔드 2/2 · 클라이언트 2개 · 클라이언트당 6".
 - 문서: `WRAPPER_API.md`에 「클라이언트 간 공평 분배」 섹션, `scheduler`·
@@ -145,6 +147,6 @@ wrapper llmwrapper`.
 - `wrapper/main.py` — `_FairScheduler`, `_recommended_concurrency()`,
   `/api/stats`·`/api/services` 시그니처(`client_id` query, `X-Client-ID`)
 - `wrapper/status.html`, `wrapper/dashboard.html` — 라벨
-- `docker-compose.yml` — `ocrwrapper:0.2.3 → 0.2.4 → 0.2.5` (wrapper, llmwrapper)
+- `docker-compose.yml` — `ocrwrapper:0.2.3 → 0.2.4 → 0.2.5 → 0.2.6` (wrapper, llmwrapper)
 - `docs/WRAPPER_API.md`, `docs/ENDPOINTS.md`
-- 이미지 `honestjung/ocrwrapper:0.2.4`, `0.2.5`는 **호스트 로컬 빌드만** (Hub 미푸시)
+- 이미지 `honestjung/ocrwrapper:0.2.4`~`0.2.6`은 **호스트 로컬 빌드만** (Hub 미푸시)
