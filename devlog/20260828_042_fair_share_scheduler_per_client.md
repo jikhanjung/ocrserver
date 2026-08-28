@@ -124,9 +124,41 @@ wrapper llmwrapper`.
 이것이었다. 두 번째 배포(recommended_concurrency 반영)는
 `up -d --no-deps wrapper llmwrapper` + 곧바로 `nginx -s reload`로 무사고.
 
-**규칙**: wrapper/llmwrapper 재생성은 항상 `--no-deps`, 그리고 재생성
-직후 nginx reload를 세트로. (nginx에 `resolver` + 변수 upstream을 넣어
-근본 해결하는 건 후속 과제.)
+**규칙**: wrapper/llmwrapper 재생성은 항상 `--no-deps`. nginx reload는
+같은 날 §8로 불필요해졌다.
+
+## 8. nginx: static upstream → resolver + 변수 proxy_pass (같은 날 오후)
+
+§5의 두 번째 원인을 근본 해결. `nginx.ocr.conf`/`nginx.llm.conf` 공통:
+
+```nginx
+resolver 127.0.0.11 valid=10s ipv6=off;   # Docker embedded DNS
+server {
+    set $wrapper http://wrapper:8000;
+    location /ocr { proxy_pass $wrapper; ... }   # 6곳 전부 변수로
+```
+
+LLM 설정은 추가로 `set $llm`, `set $llmwrapper`, 그리고 `/llm/` 접두어
+제거가 literal `proxy_pass http://llmwrapper:8000/`의 trailing slash에
+의존하고 있었으므로 `rewrite ^/llm/(.*)$ /$1 break;`로 명시.
+
+변수 `proxy_pass`는 요청마다(10s 캐시) 이름을 다시 풀기 때문에 wrapper가
+새 IP를 받아도 nginx가 따라간다. 부수 효과: 설정 로드 시 이름을 풀지
+않으므로 **`llm` 컨테이너가 꺼진 상태에서도 LLM 설정이 `nginx -t`를
+통과**한다 (static upstream 때는 불가).
+
+`chandra` upstream은 `least_conn`이 필요해 static 유지. chandra 재생성은
+mode 스크립트가 reload를 이미 하므로 문제 없음.
+
+검증 순서:
+1. 두 파일을 컨테이너에 `docker cp` → `nginx -t -c /tmp/cand.*.conf` 둘 다 OK
+2. `/srv`에 `cp`(in-place, inode 3674466 유지) → `nginx -t` → reload
+3. `/`, `/api/stats`, `/ocr`, `/status`, `/metrics`, `/static/*`, `/health`,
+   `/v1/models` 전부 200
+4. wrapper `--force-recreate` → IP가 우연히 같은 .2 → 증명 안 됨
+5. `compose rm -sf wrapper` → alpine 컨테이너로 .2 선점 → wrapper up → **.7**
+   → reload 없이 즉시 200 × 5, nginx 로그 `Host is unreachable` 0건 → 선점
+   컨테이너 제거
 
 ## 6. 호스트 근황 (부수 관찰)
 
@@ -148,5 +180,6 @@ wrapper llmwrapper`.
   `/api/stats`·`/api/services` 시그니처(`client_id` query, `X-Client-ID`)
 - `wrapper/status.html`, `wrapper/dashboard.html` — 라벨
 - `docker-compose.yml` — `ocrwrapper:0.2.3 → 0.2.4 → 0.2.5 → 0.2.6` (wrapper, llmwrapper)
+- `nginx.ocr.conf`, `nginx.llm.conf` — resolver + 변수 proxy_pass (§8)
 - `docs/WRAPPER_API.md`, `docs/ENDPOINTS.md`
 - 이미지 `honestjung/ocrwrapper:0.2.6` Hub 푸시 (digest `ae338a81564b`). 0.2.4/0.2.5는 로컬 중간 단계

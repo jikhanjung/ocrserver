@@ -11,9 +11,10 @@
 >   수로 슬롯을 나누는 `_FairScheduler`. `recommended_concurrency`는 이제
 >   **호출 클라이언트의 몫** (`?client_id=`로 자신을 밝히면 정확), 함께
 >   `recommended_concurrency_new_client`·`client_id` 필드로 자기 설명.
-> - ⚠️ **배포 규칙**: wrapper/llmwrapper 재생성은 `up -d --no-deps` +
->   직후 `nginx -s reload`. 오늘 이걸 안 지켜서 `llm`이 딸려 뜨고 nginx가
->   옛 wrapper IP를 물어 **502 약 2분** (devlog 042 §5).
+> - ⚠️ **배포 규칙**: wrapper/llmwrapper 재생성은 `up -d --no-deps` (안 그러면
+>   `llm`이 딸려 뜸). nginx reload는 **이제 불필요** — 오늘 오후 nginx를
+>   `resolver` + 변수 `proxy_pass`로 바꿔 wrapper IP 변경을 자동 추종
+>   (IP .2→.7 강제 변경 테스트로 검증, devlog 042 §5·§8).
 > - 이미지 `honestjung/ocrwrapper:0.2.6` **Hub 푸시됨** (digest `ae338a81564b`).
 >   0.2.4/0.2.5는 로컬만 (중간 단계, 푸시 불필요).
 > - OCR 워크로드 재개됨: 누적 7,823건, 오늘 두 클라이언트 동시 사용.
@@ -77,6 +78,15 @@
    `ocrwrapper:0.2.6` + `latest` Hub 푸시.
 8. PaperMeister 쪽에 `?client_id=` 로 `recommended_concurrency` 읽는 안내 **완료**
    (사용자가 직접).
+9. **nginx resolver 전환** (`nginx.ocr.conf`/`nginx.llm.conf`): `upstream wrapper`
+   블록 제거, `resolver 127.0.0.11 valid=10s` + `set $wrapper/$llm/$llmwrapper`
+   + 변수 `proxy_pass`, `/llm/` 접두어는 `rewrite`로 제거. 컨테이너 안
+   `nginx -t -c`로 두 파일 검증(LLM 설정은 llm 컨테이너 꺼진 채로도 통과 —
+   static upstream 때는 불가능했음) → 라이브 reload → 전 경로 200 → wrapper를
+   일부러 다른 IP(.2→.7)로 재생성해도 reload 없이 200, unreachable 0건.
+   `chandra` upstream은 `least_conn` 때문에 static 유지 (mode 스크립트가 reload).
+10. 08-28 03:14 재부팅 사유: 사용자 확인 — apt upgrade 후 필요하다고 해서 수동
+    재부팅. (08-13 건은 미확인이나 같은 패턴으로 추정.)
 
 ## 이전 작업 (2026-07-30 00:05 — 격리 17h 결과 확인, devlog 041 §8)
 
@@ -666,7 +676,7 @@ PaperMeister 가 60s 타임아웃으로 POST /ocr 이 5건 연속 실패한 인�
 SERVICE      IMAGE                         STATUS
 chandra-a    honestjung/ocrserver:0.1.1    Up (healthy, GPU 0, 42.8GB)
 chandra-b    honestjung/ocrserver:0.1.1    Up (healthy, GPU 1, 42.8GB) — 03:50 기동
-nginx        nginx:alpine                  Up (nginx.ocr.conf, 08:31 reload)
+nginx        nginx:alpine                  Up (nginx.ocr.conf, resolver 방식, 08:56 reload)
 wrapper      honestjung/ocrwrapper:0.2.6   Up (WRAPPER_ROLE=ocr, OCR_CONCURRENCY=12)
 llmwrapper   honestjung/ocrwrapper:0.2.6   Up (WRAPPER_ROLE=llm; upstream llm 정지라 /llm/* 502)
 llm          vllm/vllm-openai:latest       Exited (OCR×2 모드)
@@ -743,10 +753,6 @@ compose 태그만 바꾸면 됨 (이미지 로컬 보유).
 
 **2026-08-28 추가:**
 
-0. **nginx upstream 근본 해결** — `resolver 127.0.0.11 valid=10s;` + 변수
-   `proxy_pass`로 wrapper IP 변경 시 자동 재해석. 그 전까지는 재생성 후
-   `nginx -s reload` 수동 (메모리·devlog 042 §5).
-0. 08-13·08-28 재부팅 사유 확인 (둘 다 정상 종료 — 수동? unattended-upgrades?).
 
 **(2026-07-30 시점 목록 — 코어 격리 판정은 통과했으므로 1번은 완료)**
 
