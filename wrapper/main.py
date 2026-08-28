@@ -45,7 +45,93 @@ _RETRY_DELAYS = [5, 15, 30, 60]
 _mode_switching = False
 
 _jobs: dict[str, dict] = {}
-_sem: asyncio.Semaphore
+
+
+class _FairScheduler:
+    """Global OCR slot cap (CONCURRENCY) split evenly among the clients that
+    currently have pages running or waiting.
+
+    Why: a plain Semaphore is FIFO, so a client that submits a 500-page PDF
+    first queues all 500 page coroutines ahead of anyone who arrives later —
+    two clients sharing the server effectively run sequentially. Here the
+    per-client cap is ceil(CONCURRENCY / active_clients), recomputed on every
+    acquire: one client alone gets all 12 slots, two get 6 each, and when one
+    finishes the other grows back to 12 within a page's duration.
+
+    Clients are keyed by client_id; requests without one share the None key.
+    """
+
+    def __init__(self, total: int) -> None:
+        self.total = total
+        self._cond = asyncio.Condition()
+        self._inflight: dict[str | None, int] = {}
+        self._waiting: dict[str | None, int] = {}
+
+    def _active(self) -> set:
+        return {k for k, v in self._inflight.items() if v} | \
+               {k for k, v in self._waiting.items() if v}
+
+    def per_client_limit(self) -> int:
+        n = max(1, len(self._active()))
+        return max(1, -(-self.total // n))  # ceil
+
+    def _can_start(self, key) -> bool:
+        return (sum(self._inflight.values()) < self.total
+                and self._inflight.get(key, 0) < self.per_client_limit())
+
+    @asynccontextmanager
+    async def slot(self, key):
+        async with self._cond:
+            self._waiting[key] = self._waiting.get(key, 0) + 1
+            try:
+                await self._cond.wait_for(lambda: self._can_start(key))
+            finally:
+                self._waiting[key] -= 1
+                if not self._waiting[key]:
+                    del self._waiting[key]
+            self._inflight[key] = self._inflight.get(key, 0) + 1
+        try:
+            yield
+        finally:
+            async with self._cond:
+                self._inflight[key] -= 1
+                if not self._inflight[key]:
+                    del self._inflight[key]
+                self._cond.notify_all()
+
+    def snapshot(self) -> dict:
+        active = self._active()
+        return {
+            "total": self.total,
+            "active_clients": len(active),
+            "per_client_limit": self.per_client_limit(),
+            "inflight": sum(self._inflight.values()),
+            "waiting": sum(self._waiting.values()),
+            "per_client": {
+                (k if k is not None else "(none)"): {
+                    "inflight": self._inflight.get(k, 0),
+                    "waiting": self._waiting.get(k, 0),
+                } for k in sorted(active, key=lambda x: (x is None, x))
+            },
+        }
+
+
+_sched = _FairScheduler(CONCURRENCY)
+
+
+def _recommended_concurrency(cache: dict, client_id: str | None, client_given: bool) -> int:
+    """In-flight page budget a client should aim for = its fair share of the
+    usable slots. Usable = min(CONCURRENCY, alive backends × per-backend cap)
+    so a half-switched mode (one chandra alive, CONCURRENCY still 12) doesn't
+    over-promise. If the caller identifies itself (?client_id= / X-Client-ID)
+    and isn't active yet, count it as one more sharer so the number it gets
+    is the one it will actually receive once it submits."""
+    base = min(CONCURRENCY, cache["ocr_alive"] * OCR_PER_BACKEND_CONCURRENCY)
+    active = _sched._active()
+    n = len(active)
+    if client_given and client_id not in active:
+        n += 1
+    return max(1, -(-base // max(1, n)))
 _db: aiosqlite.Connection | None = None  # OCR DB (role=ocr only)
 _metrics_db: aiosqlite.Connection | None = None
 _metrics_db_lock = asyncio.Lock()
@@ -315,7 +401,7 @@ async def db_llm_stats(conn: aiosqlite.Connection, since: float) -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _sem, _db, _llm_db, _llm_db_ro
+    global _db, _llm_db, _llm_db_ro
     if WRAPPER_ROLE == "llm":
         # LLM proxy mode: only need llmserver.db RW. No OCR worker, no resume.
         os.makedirs(os.path.dirname(LLM_DB_PATH), exist_ok=True)
@@ -328,7 +414,6 @@ async def lifespan(app: FastAPI):
         return
 
     # OCR mode (default): full OCR pipeline + read-only LLM DB for dashboard.
-    _sem = asyncio.Semaphore(CONCURRENCY)
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     os.makedirs(PDF_DIR, exist_ok=True)
     _db = await aiosqlite.connect(DB_PATH)
@@ -656,8 +741,13 @@ def _mode_from_probes(cache: dict, llm_gpus: int = 1) -> str:
 
 
 @app.get("/api/services")
-async def api_services():
+async def api_services(
+    client_id: str | None = Query(None),
+    x_client_id: str | None = Header(None),
+):
     cache = await _refresh_probe_cache()
+    cid_given = client_id is not None or x_client_id is not None
+    cid = client_id if client_id is not None else x_client_id
     return {
         "chandra": cache["chandra"],
         "llm": cache["llm"],
@@ -665,9 +755,10 @@ async def api_services():
             "alive": cache["ocr_alive"],
             "total": len(OCR_BACKENDS),
             "per_backend_concurrency": OCR_PER_BACKEND_CONCURRENCY,
-            "recommended_concurrency": cache["ocr_alive"] * OCR_PER_BACKEND_CONCURRENCY,
+            "recommended_concurrency": _recommended_concurrency(cache, cid, cid_given),
             "per_backend": cache["ocr"],
         },
+        "scheduler": _sched.snapshot(),
         "_meta": {
             "chandra_url": cache.get("chandra_url"),
             "llm_url": cache.get("llm_url"),
@@ -708,7 +799,12 @@ async def api_jobs(
 
 
 @app.get("/api/stats")
-async def api_stats():
+async def api_stats(
+    client_id: str | None = Query(None),
+    x_client_id: str | None = Header(None),
+):
+    cid_given = client_id is not None or x_client_id is not None
+    cid = client_id if client_id is not None else x_client_id
     jobs = await db_list_jobs()
     counts: dict[str, int] = {
         "total": len(jobs), "queued": 0, "processing": 0,
@@ -723,10 +819,11 @@ async def api_stats():
         "counts": counts,
         "ocr_backends_alive": cache["ocr_alive"],
         "ocr_backends_total": len(OCR_BACKENDS),
-        "recommended_concurrency": cache["ocr_alive"] * OCR_PER_BACKEND_CONCURRENCY,
+        "recommended_concurrency": _recommended_concurrency(cache, cid, cid_given),
         "mode": _mode_from_probes(cache, _read_compose_llm_gpus()),
         "uptime_s": int(time.time() - _start_time),
         "concurrency": CONCURRENCY,
+        "active_clients": len(_sched._active()),
         "vllm_url": VLLM_URL,
     }
 
@@ -1114,7 +1211,7 @@ def _pdf_page_count(pdf_bytes: bytes) -> int:
 
 def _render_one_page(pdf_bytes: bytes, page_num: int) -> str:
     """Render a single page to base64-JPEG. Called from inside _ocr_page so
-    render concurrency naturally caps at the OCR semaphore (CONCURRENCY) —
+    render concurrency naturally caps at the OCR scheduler (CONCURRENCY) —
     no separate render burst, no need for a render-only semaphore."""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     try:
@@ -1131,7 +1228,7 @@ def _render_one_page(pdf_bytes: bytes, page_num: int) -> str:
 async def _run(job_id: str, pdf_bytes: bytes, skip_pages: set[int] | None = None) -> None:
     """Process all pages of a PDF. If skip_pages is given, those page indices
     are not re-submitted (used by lifespan resume). Rendering happens inside
-    each _ocr_page worker so it's paced by the OCR semaphore — the event loop
+    each _ocr_page worker so it's paced by the OCR scheduler — the event loop
     stays responsive even for 1000+ page books."""
     skip_pages = skip_pages or set()
     job = _jobs[job_id]
@@ -1233,7 +1330,7 @@ async def _resume_processing_jobs() -> None:
 
 async def _ocr_page(job: dict, page_num: int, pdf_bytes: bytes,
                     client: httpx.AsyncClient) -> None:
-    async with _sem:
+    async with _sched.slot(job.get("client_id")):
         t0 = time.time()
         last_error = ""
         try:

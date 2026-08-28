@@ -126,7 +126,7 @@
           <div class="metric-value fs-5"><span id="ocrAlive">—</span> / <span id="ocrTotal">—</span></div>
         </div>
         <div class="col-sm-4">
-          <div class="metric-label">권장 동시성</div>
+          <div class="metric-label">클라이언트당 권장 동시성 <span class="text-muted fw-normal" id="ocrClients"></span></div>
           <div class="metric-value fs-5" id="ocrRecommended">—</div>
         </div>
         <div class="col-sm-4">
@@ -326,7 +326,7 @@ async function refresh() {
     const rec = svc.ocr_backends?.recommended_concurrency;
     const conc = svc._meta?.concurrency;
     document.getElementById('concurrencyHint').textContent =
-      (rec && conc && rec !== conc) ? ` (권장 ${rec})` : '';
+      (rec && conc && rec !== conc) ? ` (클라이언트당 ${rec})` : '';
     document.getElementById('totalJobs').textContent = stats.counts?.total ?? '—';
     document.getElementById('processingJobs').textContent = stats.counts?.processing ?? '—';
 
@@ -343,6 +343,9 @@ async function refresh() {
     document.getElementById('ocrAlive').textContent = ob.alive ?? '—';
     document.getElementById('ocrTotal').textContent = ob.total ?? '—';
     document.getElementById('ocrRecommended').textContent = ob.recommended_concurrency ?? '—';
+    const sch = svc.scheduler;
+    document.getElementById('ocrClients').textContent =
+      sch ? `(활성 ${sch.active_clients}, 처리 ${sch.inflight} / 대기 ${sch.waiting})` : '';
     document.getElementById('ocrPerBackend').textContent = ob.per_backend_concurrency ?? '—';
 
     let ocrStatus = 'ok';

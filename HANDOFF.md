@@ -1,6 +1,22 @@
-# HANDOFF — 2026-07-30 (코어 5 격리로 프리즈 + 세그폴트 둘 다 멈춤)
+# HANDOFF — 2026-08-28 (wrapper 0.2.4: 클라이언트 간 GPU 슬롯 공평 분배)
 
 > **🟢 이 박스가 현재 상태의 전부다.**
+> - **호스트**: 코어 4·5 격리(07-29) 이후 **한 달째 MCE 패닉 0건**.
+>   부팅 기록 07-29 → 08-13(15일, 정상 종료) → 08-28 03:14(15일, 정상
+>   종료) → 현재. 041 결론 유지. 온라인 CPU `0-3,6-11,14-15`.
+> - **모드**: 오늘 `mode-ocr.sh`로 **OCR×2** (chandra-a + chandra-b,
+>   `OCR_CONCURRENCY=12`, mode chip `2ocr`). `llm` 컨테이너 정지.
+> - **wrapper 0.2.4 배포** (devlog 042): PaperMeister 인스턴스 2개가 동시에
+>   OCR을 돌리자 FIFO 세마포어 때문에 한쪽이 굶는 문제 → 활성 클라이언트
+>   수로 슬롯을 나누는 `_FairScheduler`. `recommended_concurrency`는 이제
+>   **호출 클라이언트의 몫** (`?client_id=`로 자신을 밝히면 정확).
+> - ⚠️ **배포 규칙**: wrapper/llmwrapper 재생성은 `up -d --no-deps` +
+>   직후 `nginx -s reload`. 오늘 이걸 안 지켜서 `llm`이 딸려 뜨고 nginx가
+>   옛 wrapper IP를 물어 **502 약 2분** (devlog 042 §5).
+> - 이미지 `honestjung/ocrwrapper:0.2.4`는 로컬 빌드만, **Hub 미푸시**.
+> - OCR 워크로드 재개됨: 누적 7,823건, 오늘 두 클라이언트 동시 사용.
+
+> **(이전 박스, 2026-07-30 — 참고용으로 남김)**
 > 07-27 이후 이틀간 호스트가 **12번 더 죽었고**(MTBF 3.8h), kdump 12건 전수
 > 디코드 결과 전부 동일한 **Fatal MCE — Bank 0(IFU), internal parity,
 > PCC=1, ADDRV=0** 이며 **에러 CPU 가 10/12 건 CPU 5** — 결함이 **물리 코어
@@ -33,7 +49,28 @@
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 ② (2026-07-30 00:05 — 격리 17h 결과 확인, devlog 041 §8)
+## 방금 한 작업 (2026-08-28 — wrapper 0.2.4 공평 분배 스케줄러, devlog 042)
+
+1. **문서 정비** (`9d1ce1e`, `8861592`, `a18f219`): 다른 컴퓨터에서 호출하는
+   법(`docs/ENDPOINTS.md` 「다른 컴퓨터에서 접속하기」, 서버
+   `172.16.112.150:8080`), 0.2.1~0.2.3 누락 API(`force`, `total_pages`,
+   `in_progress`, `_meta.images/llm_model`, 파일명 fallback dedup, 모드 전환
+   503), 업로드 상한 200MB→**500MB**(실제는 nginx `client_max_body_size`),
+   LLM 모델명 Qwen3-14B→32B-AWQ 정정, `_meta.mode` 값 목록(`1ocr`/`2ocr`/...).
+2. **OCR×2 전환 확인**: 사용자가 `mode-ocr.sh` 실행, chandra-b `init engine
+   344s`, 03:57 UTC 완료. nginx `least_conn` + 두 백엔드.
+3. **wrapper 0.2.4** — `wrapper/main.py`에 `_FairScheduler`
+   (`asyncio.Condition`, 클라이언트당 상한 `ceil(CONCURRENCY/활성 수)`),
+   `/api/services.scheduler`, `/api/stats.active_clients`,
+   `recommended_concurrency` = 호출자 몫(`?client_id=`/`X-Client-ID` 지원).
+   `/status`·`/` 라벨을 "클라이언트 N개 · 클라이언트당 M"으로.
+   시뮬레이션 + 실배포 검증: 6분간 0/1이던 1쪽짜리 job 12개가 배포 1분 내 완료.
+4. **배포 사고**: `up -d wrapper llmwrapper`(--no-deps 없이) → `llm` 기동
+   (15초 내 stop, GPU 충돌 없음) → wrapper IP 변경 → nginx 502 ~2분 →
+   `nginx -s reload`로 복구. 두 번째 배포는 `--no-deps`+reload로 무사고.
+5. 메모리 저장: `project_wrapper_recreate_no_deps_nginx_reload.md`.
+
+## 이전 작업 (2026-07-30 00:05 — 격리 17h 결과 확인, devlog 041 §8)
 
 **실험 성공.** 세 갈래가 같은 방향을 가리킨다.
 
@@ -595,42 +632,46 @@ PaperMeister 가 60s 타임아웃으로 POST /ocr 이 5건 연속 실패한 인�
 
 ## 현재 상태 (snapshot)
 
-### 운영 모드
-- nginx 모드: **OCR 1 GPU + LLM** (`nginx.llm.conf` 활성, mode chip `llm+ocr`)
+### 운영 모드 (2026-08-28 갱신)
+- nginx 모드: **OCR × 2** (`nginx.ocr.conf` 활성, `least_conn`, mode chip `2ocr`).
+  `OCR_CONCURRENCY=12` (`.env`). `llm` 컨테이너 정지 상태.
+- 클라이언트 간 분배: wrapper 0.2.4 `_FairScheduler` — 활성 `client_id` 수로
+  12슬롯 분할. 현황은 `/api/services.scheduler`.
 - 운영 디렉터리: `/srv/ocrserver/` (jikhanjung 소유, sudo 없이 docker
   compose 가능)
 - 운영 컴포즈는 prebuilt image 만 참조
 
-### CPU 상태 (2026-07-30 갱신)
+### CPU 상태 (2026-08-28 갱신)
 - **코어 4·5 오프라인** — 온라인 CPU `0-3,6-11,14-15` (16→12스레드).
-  `offline-bad-cores.service` (enabled, `active (exited)`) 가 부팅마다 적용.
-  **관찰 시작 2026-07-29 06:58:33 UTC → 17h07m 무크래시 (12h 문턱 통과).**
-  남은 판정 24h = 07-30 06:58 UTC.
+  `offline-bad-cores.service` (enabled, `active (exited)`) 가 부팅마다 적용
+  (08-28 03:15 재적용 확인).
+  **격리 이후 한 달: MCE 패닉 0건.** 부팅 07-29 04:05 → 08-13 07:54
+  (15일, `systemd-shutdown` 정상 종료) → 08-28 03:14 (15일, 정상 종료) →
+  현재. 두 재부팅의 사유는 이 세션에서 확인 안 됨 (크래시 아님).
   해제: `sudo systemctl disable --now offline-bad-cores.service`
   ⚠️ 해제하면 프리즈와 세그폴트가 **둘 다** 돌아온다.
 - CPU 는 중고 **i7-7820X**, BIOS **F1 / 2017-07-04** (미업데이트, 후순위).
   마이크로코드는 OS 가 `0x2007006` 로드 중 (`intel-microcode` 패키지).
 
-### 컨테이너 / 이미지 (운영서버) — 2026-07-27 10:05 확인 (이후 재부팅 12회)
+### 컨테이너 / 이미지 (운영서버) — 2026-08-28 08:32 UTC 확인
 ```
 SERVICE      IMAGE                         STATUS
-chandra-a    honestjung/ocrserver:0.1.1    Up 1h (healthy, GPU 0)
-chandra-b    honestjung/ocrserver:0.1.1    Exited (0) 7주 전 (profile=ocr, 비활성)
-nginx        nginx:alpine                  Up 1h (nginx.llm.conf)
-wrapper      honestjung/ocrwrapper:0.2.3   Up 1h (WRAPPER_ROLE=ocr, OCR_CONCURRENCY=6)
-llmwrapper   honestjung/ocrwrapper:0.2.3   Up 1h (WRAPPER_ROLE=llm)
-llm          vllm/vllm-openai:latest       Up 8분 (healthy, GPU 1, Qwen3-32B-AWQ)
+chandra-a    honestjung/ocrserver:0.1.1    Up (healthy, GPU 0, 42.8GB)
+chandra-b    honestjung/ocrserver:0.1.1    Up (healthy, GPU 1, 42.8GB) — 03:50 기동
+nginx        nginx:alpine                  Up (nginx.ocr.conf, 08:31 reload)
+wrapper      honestjung/ocrwrapper:0.2.4   Up (WRAPPER_ROLE=ocr, OCR_CONCURRENCY=12)
+llmwrapper   honestjung/ocrwrapper:0.2.4   Up (WRAPPER_ROLE=llm; upstream llm 정지라 /llm/* 502)
+llm          vllm/vllm-openai:latest       Exited (OCR×2 모드)
 ```
-현재 부팅은 **2026-07-27 09:04:45 UTC** 시작 (09:02:42 프리즈 → kdump 캡처 →
-자동 복구). `llm` 은 09:57:39 재시작 상태 (**RestartCount=2**, 09:50·09:57
-세그폴트 연속 2회). 재시작 후 200 OK 정상 서빙 중, 생성 ~23 tok/s.
+현재 부팅은 **2026-08-28 03:14:43 UTC** 시작 (직전 부팅 정상 종료).
+`ocrwrapper:0.2.4`는 이 호스트 로컬 빌드(Hub 미푸시). 0.2.3으로 되돌리려면
+compose 태그만 바꾸면 됨 (이미지 로컬 보유).
 
-### 워크로드 현황 (2026-07-27)
-- **OCR: 7주째 유휴.** 마지막 잡 **2026-06-09 07:00**. 큐 0/0.
-  누적 7,767건 (done 7,720 / done_with_errors 12 / failed 35).
-  chandra-a 는 GPU0 메모리만 점유, util 0% / 38°C.
-- **LLM: PaperMeister 재개돼 가동 중** (07-27 하루 803건까지 집계).
-  GPU1 util 100% / 77°C / 226W / 44.5GB.
+### 워크로드 현황 (2026-08-28)
+- **OCR: 재개.** PaperMeister 인스턴스 2개(`papermeister-7355a25d`,
+  `papermeister-7ceac4ea`)가 동시 사용 중. 누적 7,823건 (done 7,769 /
+  done_with_errors 12 / failed 35). 이 동시 사용이 0.2.4의 동기.
+- **LLM: 정지** (OCR×2 모드). 필요 시 `sudo /srv/ocrserver/mode-llm.sh`.
 - **CPU: Package 47°C** (스로틀 이력 없음). 코어 4·5 가 가장 따뜻.
 
 ### RAS / 크래시 포렌식 (2026-07-29 갱신)
@@ -690,6 +731,19 @@ llm          vllm/vllm-openai:latest       Up 8분 (healthy, GPU 1, Qwen3-32B-AW
   3DGS) 는 `done_with_errors` 로 reconcile 됨. 사용자가 재업로드 필요.
 
 ## 곧 해야 할 작업
+
+**2026-08-28 추가:**
+
+0. **nginx upstream 근본 해결** — `resolver 127.0.0.11 valid=10s;` + 변수
+   `proxy_pass`로 wrapper IP 변경 시 자동 재해석. 그 전까지는 재생성 후
+   `nginx -s reload` 수동 (메모리·devlog 042 §5).
+0. **`ocrwrapper:0.2.4` Hub 푸시 여부 결정** — 다른 호스트/RunPod에서 쓸
+   일이 생기면 `docker push honestjung/ocrwrapper:0.2.4`.
+0. PaperMeister 쪽에 `GET /api/stats?client_id=<자기 id>`로
+   `recommended_concurrency`를 읽도록 알려주기 (제출 전 정확한 몫).
+0. 08-13·08-28 재부팅 사유 확인 (둘 다 정상 종료 — 수동? unattended-upgrades?).
+
+**(2026-07-30 시점 목록 — 코어 격리 판정은 통과했으므로 1번은 완료)**
 
 devlog 041 로 우선순위를 다시 조정했다. **문제는 하나 — 열화된 CPU 코어.**
 지금은 "코어 5 국소 결함인가" vs "다이 전체로 번지는가" 의 구분 단계이고,

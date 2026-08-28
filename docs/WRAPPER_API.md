@@ -274,9 +274,10 @@ Job 카운트 + OCR 백엔드 capacity. 클라이언트가 자주 폴링해도 �
 | `counts` | status별 job 개수 |
 | `ocr_backends_alive` | health 200 응답한 OCR 백엔드 수 |
 | `ocr_backends_total` | 등록된 OCR 백엔드 수 (`OCR_BACKENDS` env) |
-| `recommended_concurrency` | 클라이언트가 채워둘 in-flight 페이지 권장값 = `alive × OCR_PER_BACKEND_CONCURRENCY` (기본 6) |
+| `recommended_concurrency` | **이 클라이언트가** 채워둘 in-flight 페이지 권장값 = 사용 가능 슬롯(`min(concurrency, alive × OCR_PER_BACKEND_CONCURRENCY)`)을 활성 클라이언트 수로 나눈 몫(올림). `?client_id=` 또는 `X-Client-ID`로 자신을 밝히면 아직 활성이 아니어도 자기 몫이 계산된다(0.2.4+). 아래 **클라이언트 간 공평 분배** 참조 |
 | `mode` | 운영 모드 라벨 (아래 표) |
-| `concurrency` | wrapper 자신의 in-flight semaphore (백엔드 수와 무관, 별도 env로 설정) |
+| `concurrency` | wrapper 전체 in-flight 페이지 상한 (`OCR_CONCURRENCY`, 백엔드 수와 무관) |
+| `active_clients` | 지금 페이지가 처리 중이거나 대기 중인 `client_id` 수 |
 
 #### `mode` 값
 
@@ -294,7 +295,7 @@ GPU 2장 환경 기준 실제 등장하는 값은 다음과 같다.
 
 ```python
 stats = requests.get("http://localhost:8080/api/stats").json()
-target_inflight = stats["recommended_concurrency"]   # 모드 따라 6 또는 12
+target_inflight = stats["recommended_concurrency"]   # 내 몫: 혼자면 12(OCR×2)/6(OCR+LLM), 둘이면 절반
 # 큐에 target_inflight 미만 남으면 추가 PDF 제출
 ```
 
@@ -320,6 +321,17 @@ target_inflight = stats["recommended_concurrency"]   # 모드 따라 6 또는 12
       "chandra-b": {"status": "down", "error": "..."}
     }
   },
+  "scheduler": {
+    "total": 12,
+    "active_clients": 2,
+    "per_client_limit": 6,
+    "inflight": 12,
+    "waiting": 30,
+    "per_client": {
+      "papermeister": {"inflight": 6, "waiting": 12},
+      "labnotes":     {"inflight": 6, "waiting": 18}
+    }
+  },
   "_meta": {
     "chandra_url": "http://nginx:80/health",
     "llm_url":     "http://nginx:80/llm/health",
@@ -341,6 +353,14 @@ target_inflight = stats["recommended_concurrency"]   # 모드 따라 6 또는 12
 }
 ```
 
+| `scheduler` 필드 | 설명 |
+|---|---|
+| `total` | wrapper 전체 in-flight 페이지 상한 (`OCR_CONCURRENCY`) |
+| `active_clients` | 지금 페이지가 돌고 있거나 대기 중인 `client_id` 수 |
+| `per_client_limit` | 지금 활성인 클라이언트 하나가 가져갈 수 있는 슬롯 수 = `ceil(total / active_clients)`. 호출자 관점의 값은 `ocr_backends.recommended_concurrency` |
+| `inflight` / `waiting` | 전체 처리 중 / 슬롯 대기 중 페이지 수 |
+| `per_client` | 활성 클라이언트별 처리 중·대기 페이지 수. `client_id` 없는 요청은 `"(none)"` |
+
 | `_meta` 필드 | 설명 |
 |---|---|
 | `mode` | 살아 있는 서비스로 추론한 운영 모드. `2ocr` (chandra ×2), `llm+ocr` (chandra + LLM), `1ocr` (chandra 하나만, LLM 없음), `llm` (LLM만), `llmx2` (LLM이 GPU 2장 점유), `down` (전부 죽음). 전환 중에는 `1ocr` 같은 중간값이 잠깐 보인다 |
@@ -348,6 +368,21 @@ target_inflight = stats["recommended_concurrency"]   # 모드 따라 6 또는 12
 | `images` | 배포 compose의 서비스별 이미지 태그. 클라이언트가 붙어 있는 wrapper/chandra 버전을 여기서 확인 |
 | `llm_model` | compose의 LLM 서비스가 띄우는 HF 모델 id. LLM 미구성 시 `null` |
 | `llm_gpus` | LLM 서비스에 배정된 GPU 수 |
+
+---
+
+## 클라이언트 간 공평 분배 (wrapper 0.2.4+)
+
+wrapper는 전체 in-flight 페이지를 `OCR_CONCURRENCY`(OCR×2 모드 12, OCR+LLM 모드 6)로 제한하는데, 이 슬롯을 **활성 클라이언트 수로 나눠** 배분한다.
+
+- 활성 클라이언트 = 지금 페이지가 처리 중이거나 슬롯을 기다리는 `client_id`. 없는 요청은 전부 하나(`None`)로 묶인다.
+- 클라이언트당 상한 = `ceil(OCR_CONCURRENCY / 활성 클라이언트 수)`. 혼자면 12 전부, 둘이면 6씩, 셋이면 4씩.
+- 상한은 페이지 하나를 시작할 때마다 다시 계산된다. 한쪽이 끝나면 남은 쪽은 페이지 한 장 처리 시간 안에 12로 되돌아간다.
+- 0.2.3까지는 단순 FIFO 세마포어여서, A가 500쪽 PDF를 먼저 넣으면 뒤에 온 B는 A가 거의 끝날 때까지 시작하지 못했다. 이제는 B가 오는 즉시 절반을 받는다.
+
+그래서 **여러 프로젝트가 같은 서버를 쓰려면 `client_id`를 서로 다르게** 주는 것이 중요하다. 같은 `client_id`(또는 둘 다 없음)면 한 클라이언트로 묶여 분배가 일어나지 않는다. 현재 분배 상태는 `/api/services`의 `scheduler`, 요약은 `/api/stats`의 `active_clients`·`recommended_concurrency`에서 본다.
+
+`recommended_concurrency`는 **호출한 클라이언트의 몫**이다. `GET /api/stats?client_id=myapp`(또는 `X-Client-ID` 헤더)처럼 자신을 밝히면, 아직 제출 전이라도 "내가 들어가면 받을 값"(활성 수 + 1로 나눈 값)이 나온다. 밝히지 않으면 현재 활성 클라이언트 기준 값이다.
 
 ---
 
@@ -391,7 +426,7 @@ for page in job["pages"]:
 | `OCR_MAX_PAGE_PX` | `2200` | 페이지 longest side 픽셀 상한. 초과 시 비례 축소 (vLLM `max_model_len` 보호) |
 | `OCR_BACKENDS` | `chandra-a,chandra-b` | health 프로브 대상 backend 컨테이너명(쉼표 구분) |
 | `OCR_BACKEND_PORT` | `8000` | 각 backend의 health 포트 |
-| `OCR_PER_BACKEND_CONCURRENCY` | `6` | backend 1개당 권장 동시성. `recommended_concurrency = alive × 이 값` |
+| `OCR_PER_BACKEND_CONCURRENCY` | `6` | backend 1개당 동시성. 사용 가능 슬롯 = `min(OCR_CONCURRENCY, alive × 이 값)`, 이를 활성 클라이언트 수로 나눈 것이 `recommended_concurrency` |
 | `DB_PATH` | `/data/ocrserver.db` | SQLite 파일 경로 |
 | `PDF_DIR` | `/data/pdfs` | 업로드 PDF 보관 디렉토리 |
 

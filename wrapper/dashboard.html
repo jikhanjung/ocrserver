@@ -196,7 +196,7 @@ async function refresh() {
       const ob = svr.ocr_backends;
       if (ob) {
         document.getElementById('ctxBackends').textContent =
-          `${ob.alive}/${ob.total} · 권장 동시성 ${ob.recommended_concurrency}`;
+          `${ob.alive}/${ob.total} · 클라이언트 ${svr.scheduler?.active_clients ?? 0}개 · 클라이언트당 ${ob.recommended_concurrency}`;
       }
     }
 

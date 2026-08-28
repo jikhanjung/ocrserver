@@ -18,7 +18,7 @@
 | 인증 | 없음. 내부망 신뢰 기반이므로 API 키/로그인 절차가 없다 |
 | 프로토콜 | HTTP (TLS 없음) |
 | 업로드 상한 | PDF 1개당 **500MB** (nginx `client_max_body_size`) |
-| 식별자 | `client_id`(form) 또는 `X-Client-ID` 헤더 — 호출 주체별로 고정값을 쓰길 권장 (dedup 단위) |
+| 식별자 | `client_id`(form) 또는 `X-Client-ID` 헤더 — **호출 주체별로 서로 다른 고정값**을 쓸 것. dedup 단위이자 GPU 슬롯 공평 분배 단위 (`WRAPPER_API.md` → 클라이언트 간 공평 분배) |
 
 ```bash
 # 연결 확인 — 200 + JSON이 오면 도달한 것
@@ -127,11 +127,11 @@ text = "\n".join(p["markdown"] for p in pages if p and p["status"] == "ok")
 
 ### 큐 깊이 자동 조정 (mode-aware)
 
-`/api/stats`의 `mode`/`recommended_concurrency`를 보면 서버가 OCR 전용(`2ocr`, 권장 12)인지 LLM 공유(`llm+ocr`, 권장 6)인지 알 수 있다. 클라이언트가 in-flight 페이지 수를 이 값에 맞추면 모드 전환 시 별도 설정 변경 없이 자동으로 throughput 추종.
+`/api/stats`의 `recommended_concurrency`는 **호출한 클라이언트 몫**의 in-flight 페이지 수다: 서버 모드(`2ocr` 12 / `llm+ocr` 6)를 활성 클라이언트 수로 나눈 값. `?client_id=myapp`으로 자신을 밝히고 호출하면 제출 전에도 정확한 몫이 나온다. 클라이언트가 이 값에 맞추면 모드 전환이나 다른 클라이언트 합류 시 별도 설정 없이 자동 추종.
 
 ```python
-stats = requests.get("http://localhost:8080/api/stats").json()
-# {"mode": "2ocr", "recommended_concurrency": 12, "ocr_backends_alive": 2, ...}
+stats = requests.get("http://localhost:8080/api/stats", params={"client_id": "myapp"}).json()
+# {"mode": "2ocr", "recommended_concurrency": 6, "active_clients": 1, ...}  ← 다른 클라이언트 하나가 이미 돌고 있으면 내 몫은 6
 target_inflight = stats["recommended_concurrency"]
 # 큐에 target_inflight 미만 남으면 추가 PDF 제출
 ```
