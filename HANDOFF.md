@@ -6,6 +6,7 @@
 >   종료) → 현재. 041 결론 유지. 온라인 CPU `0-3,6-11,14-15`.
 > - **모드**: 오늘 `mode-ocr.sh`로 **OCR×2** (chandra-a + chandra-b,
 >   `OCR_CONCURRENCY=12`, mode chip `2ocr`). `llm` 컨테이너 정지.
+>   **2026-09-07까지 OCR×2 유지** — LLM 모드 전환·검증은 그 이후.
 > - **wrapper 0.2.6 배포** (devlog 042; 0.2.4→0.2.5→0.2.6 같은 날): PaperMeister 인스턴스 2개가 동시에
 >   OCR을 돌리자 FIFO 세마포어 때문에 한쪽이 굶는 문제 → 활성 클라이언트
 >   수로 슬롯을 나누는 `_FairScheduler`. `recommended_concurrency`는 이제
@@ -752,6 +753,12 @@ compose 태그만 바꾸면 됨 (이미지 로컬 보유).
 ## 곧 해야 할 작업
 
 **2026-08-28 추가:**
+
+0. **LLM 모드 실검증 — 2026-09-07 이후** (사용자 지정; 그 전엔 OCR×2 유지).
+   `sudo /srv/ocrserver/mode-llm.sh` 후 `curl http://localhost:8080/llm/health`
+   (200), `/llm/v1/chat/completions` 짧은 요청 1건, `/status`의 LLM 카드.
+   확인 대상은 resolver 전환된 `nginx.llm.conf`의 `/llm/` `rewrite` 경로
+   (문법 검증만 된 상태). 실패 시 `git show 5af2266 -- nginx.llm.conf`.
 
 
 **(2026-07-30 시점 목록 — 코어 격리 판정은 통과했으므로 1번은 완료)**
