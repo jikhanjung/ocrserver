@@ -74,6 +74,9 @@
 6. **0.2.5**: `recommended_concurrency_new_client` + `client_id` 응답 필드
    (id 없이 불러도 안전한 값을 고를 수 있게). `--no-deps`+reload 배포, 무사고.
 7. **0.2.6**: 대시보드(`/`) job 테이블에 「클라이언트」 열 (`client_id`).
+   `ocrwrapper:0.2.6` + `latest` Hub 푸시.
+8. PaperMeister 쪽에 `?client_id=` 로 `recommended_concurrency` 읽는 안내 **완료**
+   (사용자가 직접).
 
 ## 이전 작업 (2026-07-30 00:05 — 격리 17h 결과 확인, devlog 041 §8)
 
@@ -743,9 +746,6 @@ compose 태그만 바꾸면 됨 (이미지 로컬 보유).
 0. **nginx upstream 근본 해결** — `resolver 127.0.0.11 valid=10s;` + 변수
    `proxy_pass`로 wrapper IP 변경 시 자동 재해석. 그 전까지는 재생성 후
    `nginx -s reload` 수동 (메모리·devlog 042 §5).
-0. PaperMeister 쪽에 `GET /api/stats?client_id=<자기 id>`로
-   `recommended_concurrency`를 읽도록 알려주기 (id 없이 부르면
-   `recommended_concurrency_new_client`를 쓰라고).
 0. 08-13·08-28 재부팅 사유 확인 (둘 다 정상 종료 — 수동? unattended-upgrades?).
 
 **(2026-07-30 시점 목록 — 코어 격리 판정은 통과했으므로 1번은 완료)**
