@@ -1,4 +1,4 @@
-# devlog 042 — 클라이언트 간 GPU 슬롯 공평 분배 (wrapper 0.2.4)
+# devlog 042 — 클라이언트 간 GPU 슬롯 공평 분배 (wrapper 0.2.4 → 0.2.5)
 
 날짜: 2026-08-28
 태그: wrapper 기능 (스케줄러), 배포 사고 1건 (nginx 502 ~2분), 문서 갱신
@@ -89,6 +89,12 @@ max inflight seen per client: A 12, B 6   (전역 12 초과 0회)
   클라이언트 수로 나눈 올림값. `?client_id=` 또는 `X-Client-ID`로 자신을
   밝히면 아직 제출 전이라도 "내가 들어가면 받을 값"(활성+1로 나눔)이 나온다.
   `/api/stats`, `/api/services` 둘 다 동일.
+- **0.2.5 (같은 날 후속)** — "`?client_id=`를 붙여야 한다는 걸 어떻게
+  알지?"라는 지적. 응답에 힌트가 없었다. `/api/stats`·`/api/services`에
+  `recommended_concurrency_new_client`(새 클라이언트가 합류하면 받을 값)와
+  `client_id`(서버가 받은 id, 없으면 null)를 추가. id 없이 부르면 두 권장값이
+  다르게 나와 그 자체가 힌트이고, 제출 전이면 `_new_client`를 쓰면 안전하다.
+  id를 주면 둘이 같아진다. 0.2.5 배포는 `--no-deps` + reload로 무사고.
 - `/status` "권장 동시성" → "클라이언트당 권장 동시성 (활성 N, 처리 x /
   대기 y)". `/` 상단 칩 → "OCR 백엔드 2/2 · 클라이언트 2개 · 클라이언트당 6".
 - 문서: `WRAPPER_API.md`에 「클라이언트 간 공평 분배」 섹션, `scheduler`·
@@ -139,6 +145,6 @@ wrapper llmwrapper`.
 - `wrapper/main.py` — `_FairScheduler`, `_recommended_concurrency()`,
   `/api/stats`·`/api/services` 시그니처(`client_id` query, `X-Client-ID`)
 - `wrapper/status.html`, `wrapper/dashboard.html` — 라벨
-- `docker-compose.yml` — `ocrwrapper:0.2.3 → 0.2.4` (wrapper, llmwrapper)
+- `docker-compose.yml` — `ocrwrapper:0.2.3 → 0.2.4 → 0.2.5` (wrapper, llmwrapper)
 - `docs/WRAPPER_API.md`, `docs/ENDPOINTS.md`
-- 이미지 `honestjung/ocrwrapper:0.2.4`는 **호스트 로컬 빌드만** (Hub 미푸시)
+- 이미지 `honestjung/ocrwrapper:0.2.4`, `0.2.5`는 **호스트 로컬 빌드만** (Hub 미푸시)

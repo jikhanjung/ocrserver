@@ -274,7 +274,9 @@ Job 카운트 + OCR 백엔드 capacity. 클라이언트가 자주 폴링해도 �
 | `counts` | status별 job 개수 |
 | `ocr_backends_alive` | health 200 응답한 OCR 백엔드 수 |
 | `ocr_backends_total` | 등록된 OCR 백엔드 수 (`OCR_BACKENDS` env) |
-| `recommended_concurrency` | **이 클라이언트가** 채워둘 in-flight 페이지 권장값 = 사용 가능 슬롯(`min(concurrency, alive × OCR_PER_BACKEND_CONCURRENCY)`)을 활성 클라이언트 수로 나눈 몫(올림). `?client_id=` 또는 `X-Client-ID`로 자신을 밝히면 아직 활성이 아니어도 자기 몫이 계산된다(0.2.4+). 아래 **클라이언트 간 공평 분배** 참조 |
+| `recommended_concurrency` | **호출자의** in-flight 페이지 권장값 = 사용 가능 슬롯(`min(concurrency, alive × OCR_PER_BACKEND_CONCURRENCY)`)을 활성 클라이언트 수로 나눈 몫(올림). `?client_id=` 또는 `X-Client-ID`로 자신을 밝히면 정확. 아래 **클라이언트 간 공평 분배** 참조 |
+| `recommended_concurrency_new_client` | 지금 **새 클라이언트가 합류하면** 받을 값 (0.2.5+). `client_id` 없이 불렀고 아직 제출 전이면 **이 값을 쓸 것**. 자신을 밝힌 호출자에겐 위 값과 같다 |
+| `client_id` | 호출자가 밝힌 id 그대로, 없으면 `null`. 두 권장값이 다르면 id를 안 준 것 |
 | `mode` | 운영 모드 라벨 (아래 표) |
 | `concurrency` | wrapper 전체 in-flight 페이지 상한 (`OCR_CONCURRENCY`, 백엔드 수와 무관) |
 | `active_clients` | 지금 페이지가 처리 중이거나 대기 중인 `client_id` 수 |
@@ -316,6 +318,9 @@ target_inflight = stats["recommended_concurrency"]   # 내 몫: 혼자면 12(OCR
     "total": 2,
     "per_backend_concurrency": 6,
     "recommended_concurrency": 6,
+    "recommended_concurrency_new_client": 3,
+    "client_id": null,
+    "active_clients": 2,
     "per_backend": {
       "chandra-a": {"status": "ok", "http_status": 200},
       "chandra-b": {"status": "down", "error": "..."}
@@ -382,7 +387,15 @@ wrapper는 전체 in-flight 페이지를 `OCR_CONCURRENCY`(OCR×2 모드 12, OCR
 
 그래서 **여러 프로젝트가 같은 서버를 쓰려면 `client_id`를 서로 다르게** 주는 것이 중요하다. 같은 `client_id`(또는 둘 다 없음)면 한 클라이언트로 묶여 분배가 일어나지 않는다. 현재 분배 상태는 `/api/services`의 `scheduler`, 요약은 `/api/stats`의 `active_clients`·`recommended_concurrency`에서 본다.
 
-`recommended_concurrency`는 **호출한 클라이언트의 몫**이다. `GET /api/stats?client_id=myapp`(또는 `X-Client-ID` 헤더)처럼 자신을 밝히면, 아직 제출 전이라도 "내가 들어가면 받을 값"(활성 수 + 1로 나눈 값)이 나온다. 밝히지 않으면 현재 활성 클라이언트 기준 값이다.
+`/api/stats`·`/api/services`는 권장값을 두 개 돌려준다:
+
+| 상황 | 쓸 값 |
+|---|---|
+| `client_id` 없이 호출, 아직 제출 전 | `recommended_concurrency_new_client` |
+| `?client_id=myapp`(또는 `X-Client-ID`)으로 호출 | `recommended_concurrency` (제출 전이든 진행 중이든 정확한 자기 몫) |
+| `client_id` 없이 호출, 이미 진행 중 | 자신이 활성 수에 포함돼 있으므로 `recommended_concurrency` — 단 다른 익명 클라이언트와 구분이 안 되니 id를 주는 편이 낫다 |
+
+id를 주면 두 값이 같아진다. 다르게 나온다면 id가 전달되지 않은 것이다. 응답의 `client_id` 필드로 서버가 무엇을 받았는지 확인할 수 있다.
 
 ---
 

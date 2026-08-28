@@ -132,6 +132,24 @@ def _recommended_concurrency(cache: dict, client_id: str | None, client_given: b
     if client_given and client_id not in active:
         n += 1
     return max(1, -(-base // max(1, n)))
+
+
+def _concurrency_fields(cache: dict, client_id: str | None, client_given: bool) -> dict:
+    """Self-describing concurrency block for /api/stats and /api/services.
+    `recommended_concurrency` is the caller's share (exact when it identifies
+    itself via ?client_id= / X-Client-ID). `recommended_concurrency_new_client`
+    is what one more client would get — an anonymous caller that hasn't
+    submitted yet should use that one. When the caller identifies itself the
+    two are equal, which is the hint that the id was picked up."""
+    base = min(CONCURRENCY, cache["ocr_alive"] * OCR_PER_BACKEND_CONCURRENCY)
+    active = _sched._active()
+    n_new = len(active) + (0 if (client_given and client_id in active) else 1)
+    return {
+        "recommended_concurrency": _recommended_concurrency(cache, client_id, client_given),
+        "recommended_concurrency_new_client": max(1, -(-base // n_new)),
+        "client_id": client_id if client_given else None,
+        "active_clients": len(active),
+    }
 _db: aiosqlite.Connection | None = None  # OCR DB (role=ocr only)
 _metrics_db: aiosqlite.Connection | None = None
 _metrics_db_lock = asyncio.Lock()
@@ -755,7 +773,7 @@ async def api_services(
             "alive": cache["ocr_alive"],
             "total": len(OCR_BACKENDS),
             "per_backend_concurrency": OCR_PER_BACKEND_CONCURRENCY,
-            "recommended_concurrency": _recommended_concurrency(cache, cid, cid_given),
+            **_concurrency_fields(cache, cid, cid_given),
             "per_backend": cache["ocr"],
         },
         "scheduler": _sched.snapshot(),
@@ -819,11 +837,10 @@ async def api_stats(
         "counts": counts,
         "ocr_backends_alive": cache["ocr_alive"],
         "ocr_backends_total": len(OCR_BACKENDS),
-        "recommended_concurrency": _recommended_concurrency(cache, cid, cid_given),
+        **_concurrency_fields(cache, cid, cid_given),
         "mode": _mode_from_probes(cache, _read_compose_llm_gpus()),
         "uptime_s": int(time.time() - _start_time),
         "concurrency": CONCURRENCY,
-        "active_clients": len(_sched._active()),
         "vllm_url": VLLM_URL,
     }
 

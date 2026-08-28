@@ -127,11 +127,12 @@ text = "\n".join(p["markdown"] for p in pages if p and p["status"] == "ok")
 
 ### 큐 깊이 자동 조정 (mode-aware)
 
-`/api/stats`의 `recommended_concurrency`는 **호출한 클라이언트 몫**의 in-flight 페이지 수다: 서버 모드(`2ocr` 12 / `llm+ocr` 6)를 활성 클라이언트 수로 나눈 값. `?client_id=myapp`으로 자신을 밝히고 호출하면 제출 전에도 정확한 몫이 나온다. 클라이언트가 이 값에 맞추면 모드 전환이나 다른 클라이언트 합류 시 별도 설정 없이 자동 추종.
+`/api/stats`는 in-flight 페이지 권장값을 두 개 준다. `recommended_concurrency`는 **호출자 몫**(서버 모드 `2ocr` 12 / `llm+ocr` 6을 활성 클라이언트 수로 나눈 값), `recommended_concurrency_new_client`는 **새로 합류하는 클라이언트가 받을 값**. `?client_id=myapp`으로 자신을 밝히면 둘이 같아지고 그 값이 정확한 몫이다. 밝히지 않았고 아직 제출 전이면 `_new_client` 쪽을 쓴다. 이 값에 맞추면 모드 전환이나 다른 클라이언트 합류 시 별도 설정 없이 자동 추종.
 
 ```python
 stats = requests.get("http://localhost:8080/api/stats", params={"client_id": "myapp"}).json()
-# {"mode": "2ocr", "recommended_concurrency": 6, "active_clients": 1, ...}  ← 다른 클라이언트 하나가 이미 돌고 있으면 내 몫은 6
+# {"mode": "2ocr", "recommended_concurrency": 6, "recommended_concurrency_new_client": 6,
+#  "client_id": "myapp", "active_clients": 1, ...}   ← 다른 클라이언트 하나가 돌고 있으면 내 몫은 6
 target_inflight = stats["recommended_concurrency"]
 # 큐에 target_inflight 미만 남으면 추가 PDF 제출
 ```
