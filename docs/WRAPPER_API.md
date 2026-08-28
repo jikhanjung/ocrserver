@@ -5,6 +5,9 @@ PDF 파일을 받아 페이지별 OCR을 수행하고 결과를 반환하는 비
 
 **Base URL**: `http://<host>:8080`
 
+현재 배포 서버는 `http://172.16.112.150:8080` (KOPRI 내부망 전용, 인증 없음).
+다른 컴퓨터에서 호출하는 방법과 주의사항은 [`ENDPOINTS.md` → 다른 컴퓨터에서 접속하기](./ENDPOINTS.md#다른-컴퓨터에서-접속하기) 참조.
+
 ---
 
 ## 엔드포인트 목록
@@ -31,7 +34,7 @@ Content-Type: multipart/form-data
 
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
-| `file` | binary | ✓ | PDF 파일 (최대 200MB) |
+| `file` | binary | ✓ | PDF 파일 (최대 500MB, nginx `client_max_body_size`) |
 | `client_id` | string | – | 호출자 식별자. 미지정 시 dedup 키는 NULL. 헤더 대신 사용 가능 |
 
 `client_id`는 form 필드 대신 **`X-Client-ID` HTTP 헤더**로도 전달할 수 있다. 둘 다 보낼 경우 form 필드가 우선한다.
