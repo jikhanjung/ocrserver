@@ -343,7 +343,7 @@ target_inflight = stats["recommended_concurrency"]   # 모드 따라 6 또는 12
 
 | `_meta` 필드 | 설명 |
 |---|---|
-| `mode` | 살아 있는 서비스로 추론한 운영 모드. `2ocr` (chandra ×2), `llm+ocr` (chandra + LLM), `ocr`/`llm` (한쪽만), `llmx2` (LLM이 GPU 2장 점유), `down` (전부 죽음) |
+| `mode` | 살아 있는 서비스로 추론한 운영 모드. `2ocr` (chandra ×2), `llm+ocr` (chandra + LLM), `1ocr` (chandra 하나만, LLM 없음), `llm` (LLM만), `llmx2` (LLM이 GPU 2장 점유), `down` (전부 죽음). 전환 중에는 `1ocr` 같은 중간값이 잠깐 보인다 |
 | `probe_age_s` | 헬스 캐시 나이 (0~5). freshness 확인용 |
 | `images` | 배포 compose의 서비스별 이미지 태그. 클라이언트가 붙어 있는 wrapper/chandra 버전을 여기서 확인 |
 | `llm_model` | compose의 LLM 서비스가 띄우는 HF 모델 id. LLM 미구성 시 `null` |
