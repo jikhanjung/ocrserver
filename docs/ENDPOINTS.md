@@ -50,7 +50,7 @@ curl -s -X POST $BASE/ocr -F "file=@doc.pdf" -F "client_id=myapp"
 └────┬────┘
      │
      ├─ /ocr, /api/, /          → wrapper (FastAPI, Job 관리)
-     ├─ /llm/                   → llm (vLLM, Qwen3-14B)
+     ├─ /llm/                   → llm (vLLM, Qwen3-32B-AWQ)
      └─ /health, /v1/*          → chandra-a (vLLM, Chandra OCR)
 ```
 
@@ -65,7 +65,7 @@ PDF를 통째로 보내면 비동기로 처리해 결과를 반환한다.
 
 | Method | Path | 설명 |
 |---|---|---|
-| `POST` | `/ocr` | PDF 제출, job_id 즉시 반환 |
+| `POST` | `/ocr` | PDF 제출, job_id 즉시 반환 (`force=true`로 dedup 우회, `total_pages` 힌트 가능) |
 | `GET` | `/ocr/{job_id}` | Job 상태 및 전체 결과 조회 |
 | `GET` | `/ocr` | 전체 Job 목록 조회 (`?client_id=...` 필터) |
 | `GET` | `/api/stats` | Job 카운트 + OCR backend capacity (`mode`, `recommended_concurrency`) |
@@ -140,11 +140,11 @@ target_inflight = stats["recommended_concurrency"]
 
 ---
 
-## 2. LLM — Qwen3-14B 범용 언어 모델
+## 2. LLM — Qwen3-32B-AWQ 범용 언어 모델
 
 OpenAI 호환 API. 경로 `/llm/` 이하가 vLLM(`llm:8000/`)으로 라우팅된다.
 
-- **모델명**: `qwen`
+- **모델명**: `qwen` (`--served-model-name`; 실제 HF id는 `/api/services`의 `_meta.llm_model`)
 - **컨텍스트**: 최대 32,768 토큰
 - **GPU**: GPU 1 (LLM 모드 시)
 
@@ -309,7 +309,7 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 GPU 1을 OCR 또는 LLM 용도로 전환한다.
 
 ### LLM 모드 (기본)
-GPU 0: OCR, GPU 1: Qwen3-14B
+GPU 0: OCR, GPU 1: Qwen3-32B-AWQ
 
 ```bash
 sudo /srv/ocrserver/mode-llm.sh

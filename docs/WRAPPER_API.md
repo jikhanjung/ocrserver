@@ -36,26 +36,63 @@ Content-Type: multipart/form-data
 |---|---|---|---|
 | `file` | binary | ✓ | PDF 파일 (최대 500MB, nginx `client_max_body_size`) |
 | `client_id` | string | – | 호출자 식별자. 미지정 시 dedup 키는 NULL. 헤더 대신 사용 가능 |
+| `total_pages` | int | – | 페이지 수 힌트. 주면 첫 폴링부터 `total_pages`가 채워져 클라이언트가 큐 크기를 잡을 수 있다. 없거나 0 이하면 서버가 PDF를 파싱해 센다. 값이 틀려도 렌더 시점에 실제 값으로 덮어써진다 |
+| `force` | bool | – | `true`면 **dedup을 완전히 건너뛰고** 새 job_id로 다시 OCR한다. 아래 **강제 재처리** 참조. 기본 `false` |
 
 `client_id`는 form 필드 대신 **`X-Client-ID` HTTP 헤더**로도 전달할 수 있다. 둘 다 보낼 경우 form 필드가 우선한다.
 
 ### Response `200 OK`
 
+신규 job이 만들어진 경우:
+
 ```json
 {
   "job_id": "b41c324a-941c-41f6-bae3-efba4f9c44a4",
-  "cached": false
+  "cached": false,
+  "forced": false,
+  "total_pages": 15
 }
 ```
 
-| 필드 | 설명 |
-|---|---|
-| `job_id` | Job 식별자 (UUID v4) |
-| `cached` | `true`면 동일 PDF의 기존 완료 결과를 그대로 반환(신규 OCR 미수행). 아래 **중복 제거** 참조 |
+dedup에 걸려 기존 job을 돌려준 경우:
+
+```json
+{
+  "job_id": "b41c324a-941c-41f6-bae3-efba4f9c44a4",
+  "cached": true,
+  "in_progress": false,
+  "total_pages": 15
+}
+```
+
+| 필드 | 있을 때 | 설명 |
+|---|---|---|
+| `job_id` | 항상 | Job 식별자 (UUID v4) |
+| `cached` | 항상 | `true`면 기존 job을 그대로 반환(신규 OCR 미수행). 아래 **중복 제거** 참조 |
+| `total_pages` | 항상 | 페이지 수 (요청 힌트 → 없으면 서버 파싱 → 기존 job이면 그 job의 값). 파싱 실패 시 0 |
+| `forced` | `cached=false` | 요청의 `force` 값을 그대로 반환 |
+| `in_progress` | `cached=true` | 매칭된 job이 아직 `queued`/`processing`이면 `true`. 이때는 `GET /ocr/{job_id}` 폴링을 계속해야 한다 |
+
+### 503 — 모드 전환 중
+
+`mode-ocr.sh`/`mode-llm.sh`로 GPU 모드를 바꾸는 동안 `POST /ocr`은 `503 {"detail": "mode switch in progress, please retry shortly"}`를 돌려준다. 수십 초 뒤 재시도하면 된다.
 
 ### 중복 제거 (dedup)
 
-같은 `(file_hash, client_id)` 조합으로 이전에 완료(`status='done'`)된 job이 있으면 그 `job_id`를 그대로 돌려준다(GPU 시간 절약). `client_id`가 다르면 같은 PDF여도 **별개 job으로 새로 처리**된다. `client_id` 미지정(NULL)끼리도 서로 dedup된다.
+`force`가 없으면 제출 시 아래 순서로 기존 job을 찾고, 있으면 그 `job_id`를 돌려준다(GPU 시간 절약).
+
+1. **해시 매칭** — 같은 `(file_hash, client_id)`이고 status가 `done`·`processing`·`queued` 중 하나인 job. `done`이 우선, 같은 status면 최신 것. 진행 중인 job도 매칭되므로 클라이언트가 job_id를 잃어버리고(재시작, 새로고침) 다시 올려도 같은 파일이 두 번 돌지 않는다. **`failed`는 매칭하지 않는다** — 실패한 파일은 그냥 다시 올리면 재시도된다.
+2. **파일명 fallback** — 1에서 못 찾으면 `(filename, total_pages, client_id)`가 같고 `file_hash`가 NULL인 `done` job. 해시를 저장하지 않던 옛 버전의 row를 구제하기 위한 것으로, 매칭되면 그 row에 지금 해시를 채워 넣는다. 해시가 이미 있는 row는 대상이 아니므로 새로 만든 job끼리 파일명만 같다고 섞이지는 않는다.
+
+`client_id`가 다르면 같은 PDF여도 **별개 job으로 새로 처리**된다. `client_id` 미지정(NULL)끼리도 서로 dedup된다.
+
+### 강제 재처리 (`force=true`)
+
+이전 결과에 빈 페이지가 섞였다든지 해서 다시 뽑고 싶을 때 쓴다. 동작:
+
+- dedup을 전혀 타지 않고 **새 job_id**로 처음부터 OCR한다. 응답은 `cached=false, forced=true`.
+- 이전 job row와 그 결과는 **지우지 않는다.** 같은 파일에 job이 여러 개 남게 되고, 이후 `force` 없는 재제출은 그중 **가장 최근 job**을 돌려준다. 옛 결과가 필요하면 job_id를 따로 보관해 둘 것.
+- 재실행 결과가 이전과 같다는 보장은 없다. wrapper는 OCR 요청에 temperature/seed를 고정하지 않으므로 `force`는 "재생성"이지 "재현"이 아니다. 재현성이 필요한 쪽은 job_id 기준으로 결과를 보관하는 편이 맞다.
 
 ### 예시
 
@@ -73,6 +110,13 @@ curl -X POST http://localhost:8080/ocr \
 curl -X POST http://localhost:8080/ocr \
   -H "X-Client-ID: papermeister" \
   -F "file=@paper.pdf"
+
+# 페이지 수 힌트 + 강제 재처리
+curl -X POST http://localhost:8080/ocr \
+  -F "file=@paper.pdf" \
+  -F "client_id=papermeister" \
+  -F "total_pages=15" \
+  -F "force=true"
 ```
 
 ---
@@ -282,12 +326,28 @@ target_inflight = stats["recommended_concurrency"]   # 모드 따라 6 또는 12
     "concurrency": 6,
     "mode": "llm+ocr",
     "probe_age_s": 0.3,
-    "uptime_s": 32
+    "uptime_s": 32,
+    "images": {
+      "nginx": "nginx:alpine",
+      "wrapper": "honestjung/ocrwrapper:0.2.3",
+      "llmwrapper": "honestjung/ocrwrapper:0.2.3",
+      "chandra-a": "honestjung/ocrserver:0.1.1",
+      "chandra-b": "honestjung/ocrserver:0.1.1",
+      "llm": "vllm/vllm-openai:latest"
+    },
+    "llm_model": "Qwen/Qwen3-32B-AWQ",
+    "llm_gpus": 1
   }
 }
 ```
 
-`probe_age_s`로 캐시 freshness 확인 가능 (0~5).
+| `_meta` 필드 | 설명 |
+|---|---|
+| `mode` | 살아 있는 서비스로 추론한 운영 모드. `2ocr` (chandra ×2), `llm+ocr` (chandra + LLM), `ocr`/`llm` (한쪽만), `llmx2` (LLM이 GPU 2장 점유), `down` (전부 죽음) |
+| `probe_age_s` | 헬스 캐시 나이 (0~5). freshness 확인용 |
+| `images` | 배포 compose의 서비스별 이미지 태그. 클라이언트가 붙어 있는 wrapper/chandra 버전을 여기서 확인 |
+| `llm_model` | compose의 LLM 서비스가 띄우는 HF 모델 id. LLM 미구성 시 `null` |
+| `llm_gpus` | LLM 서비스에 배정된 GPU 수 |
 
 ---
 
@@ -338,6 +398,6 @@ for page in job["pages"]:
 ## 제약 사항
 
 - Job 메타데이터·페이지 결과는 SQLite(`DB_PATH`)에 영속 저장됨. wrapper 컨테이너 재시작 후에도 조회 가능
-- 단, 재시작 시 in-flight `processing` job은 자동 재개되지 않음 (DB에는 `processing`으로 남음)
+- wrapper 재시작 시 DB에 `processing`으로 남은 job은 시작 시 자동 재개된다 (`ok`인 페이지는 건너뛰고 실패/미완 페이지만 다시 렌더)
 - **인증 없음** — 내부망 전용. 외부 노출 시 별도 인증 레이어 필요. `client_id`는 단순 식별자이며 검증되지 않음
 - 502/503 오류 시 자동 재시도 (5s → 15s → 30s → 60s, 최대 4회)
