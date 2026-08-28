@@ -694,7 +694,8 @@ compose 태그만 바꾸면 됨 (이미지 로컬 보유).
   UC 로 감. CE 축적을 기다리는 전략은 폐기.
   ⚠️ `ras-mc-ctl --errors` 는 `signal_event` 스키마 불일치로 죽음 —
   sqlite3 직접 조회할 것.
-- **crash 유틸 설치됨**, **dbgsym 은 미확보** (ddebs 에 7.0.0-28 미발행).
+- **crash 유틸 설치됨**, **dbgsym 은 발행됐으나 미설치** (2026-08-28 확인:
+  현재 커널 7.0.0-30, ddebs Candidate `7.0.0-30.30`).
 
 ### DB
 - `data/ocrserver.db` — OCR 잡/페이지. wrapper RW. ~1.5GB (jobs 7700+).
@@ -720,8 +721,8 @@ compose 태그만 바꾸면 됨 (이미지 로컬 보유).
   - sysrq 테스트 덤프는 검증 후 삭제함. **`/var/crash` 는 현재 비어 있음**
     (`kdump_lock` / `kexec_cmd` 는 kdump-tools 운영 파일이라 삭제 대상 아님).
     → 앞으로 여기 타임스탬프 디렉터리가 생기면 **실제 프리즈**의 vmcore.
-  - 커널 디버그 심볼(dbgsym)은 **아직 없음** — ddebs 에 7.0.0-28 미발행.
-    ddebs 저장소는 등록해 둠. 심볼 없이도 dmesg 백트레이스는 심볼화돼 읽힘.
+  - 커널 디버그 심볼(dbgsym): **ddebs 에 올라옴 (7.0.0-30.30), 아직 미설치**
+    (2026-08-28). 심볼 없이도 dmesg 백트레이스는 심볼화돼 읽힘.
 - `ocrserver-metrics.timer` 활성, 1분 주기 → `/srv/ocrserver/data/metrics.db`
 - `ocrserver-gpu-power-limit.service` 활성 — 두 RTX 8000 power limit
   230W 를 boot 마다 자동 적용 (025 에서 설치, 이번 reboot 에 첫 자동
@@ -807,10 +808,11 @@ devlog 041 로 우선순위를 다시 조정했다. **문제는 하나 — 열�
 
 ### 그 외 (우선순위 낮음)
 
-6. **dbgsym 확보 대기** — ddebs 에 7.0.0-28 미발행 (저장소 등록은 완료).
-   `apt-cache policy linux-image-$(uname -r)-dbgsym` 로 주기 확인.
-   이번 건은 MCE 라 dmesg 만으로 결론이 났으나, **다음 건이 커널 Oops 면
-   심볼이 필요**하다. `crash` 유틸은 설치돼 있음.
+6. **dbgsym 설치** — 2026-08-28 확인: 현재 커널 7.0.0-30 의 심볼이 ddebs 에
+   **발행됨** (`Candidate: 7.0.0-30.30`), 아직 설치 안 함.
+   `sudo apt install linux-image-7.0.0-30-generic-dbgsym` (~1GB, 루트 여유
+   확인). MCE 가 한 달째 0건이라 급하지 않음 — vmcore 가 새로 생기거나
+   커널이 범프되면 그때 버전 맞춰 설치. `crash` 유틸은 설치돼 있음.
 7. **호스트 메모리 테스트** — 우선순위 대폭 하향 (DRAM 배제됨).
    그래도 완전 무죄는 아니므로 케이스 열 일 있으면 memtest86+ 수 시간.
 8. **GPU ECC 활성화 검토** — 가용 VRAM 1~2% 감소로 현재 44.5GB 쓰는 모델이
