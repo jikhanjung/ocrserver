@@ -14,7 +14,8 @@
 > - ⚠️ **배포 규칙**: wrapper/llmwrapper 재생성은 `up -d --no-deps` +
 >   직후 `nginx -s reload`. 오늘 이걸 안 지켜서 `llm`이 딸려 뜨고 nginx가
 >   옛 wrapper IP를 물어 **502 약 2분** (devlog 042 §5).
-> - 이미지 `honestjung/ocrwrapper:0.2.4`~`0.2.6`은 로컬 빌드만, **Hub 미푸시**.
+> - 이미지 `honestjung/ocrwrapper:0.2.6` **Hub 푸시됨** (digest `ae338a81564b`).
+>   0.2.4/0.2.5는 로컬만 (중간 단계, 푸시 불필요).
 > - OCR 워크로드 재개됨: 누적 7,823건, 오늘 두 클라이언트 동시 사용.
 
 > **(이전 박스, 2026-07-30 — 참고용으로 남김)**
@@ -668,7 +669,7 @@ llmwrapper   honestjung/ocrwrapper:0.2.6   Up (WRAPPER_ROLE=llm; upstream llm �
 llm          vllm/vllm-openai:latest       Exited (OCR×2 모드)
 ```
 현재 부팅은 **2026-08-28 03:14:43 UTC** 시작 (직전 부팅 정상 종료).
-`ocrwrapper:0.2.6`은 이 호스트 로컬 빌드(Hub 미푸시, 0.2.4/0.2.5도 로컬 보유). 0.2.3으로 되돌리려면
+`ocrwrapper:0.2.6`은 Hub에 있음 (`docker pull` 가능). 0.2.4/0.2.5는 로컬만. 0.2.3으로 되돌리려면
 compose 태그만 바꾸면 됨 (이미지 로컬 보유).
 
 ### 워크로드 현황 (2026-08-28)
@@ -741,8 +742,6 @@ compose 태그만 바꾸면 됨 (이미지 로컬 보유).
 0. **nginx upstream 근본 해결** — `resolver 127.0.0.11 valid=10s;` + 변수
    `proxy_pass`로 wrapper IP 변경 시 자동 재해석. 그 전까지는 재생성 후
    `nginx -s reload` 수동 (메모리·devlog 042 §5).
-0. **`ocrwrapper:0.2.6` Hub 푸시 여부 결정** — 다른 호스트/RunPod에서 쓸
-   일이 생기면 `docker push honestjung/ocrwrapper:0.2.6`.
 0. PaperMeister 쪽에 `GET /api/stats?client_id=<자기 id>`로
    `recommended_concurrency`를 읽도록 알려주기 (id 없이 부르면
    `recommended_concurrency_new_client`를 쓰라고).

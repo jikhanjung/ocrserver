@@ -149,4 +149,4 @@ wrapper llmwrapper`.
 - `wrapper/status.html`, `wrapper/dashboard.html` — 라벨
 - `docker-compose.yml` — `ocrwrapper:0.2.3 → 0.2.4 → 0.2.5 → 0.2.6` (wrapper, llmwrapper)
 - `docs/WRAPPER_API.md`, `docs/ENDPOINTS.md`
-- 이미지 `honestjung/ocrwrapper:0.2.4`~`0.2.6`은 **호스트 로컬 빌드만** (Hub 미푸시)
+- 이미지 `honestjung/ocrwrapper:0.2.6` Hub 푸시 (digest `ae338a81564b`). 0.2.4/0.2.5는 로컬 중간 단계
