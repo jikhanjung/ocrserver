@@ -1,24 +1,26 @@
-# HANDOFF — 2026-08-28 (wrapper 0.2.6: 클라이언트 간 GPU 슬롯 공평 분배)
+# HANDOFF — 2026-09-08 (nginx upstream `resolve`; chandra-b 정지 중 IP 재사용 사고)
 
 > **🟢 이 박스가 현재 상태의 전부다.**
-> - **호스트**: 코어 4·5 격리(07-29) 이후 **한 달째 MCE 패닉 0건**.
->   부팅 기록 07-29 → 08-13(15일, 정상 종료) → 08-28 03:14(15일, 정상
->   종료) → 현재. 041 결론 유지. 온라인 CPU `0-3,6-11,14-15`.
-> - **모드**: 오늘 `mode-ocr.sh`로 **OCR×2** (chandra-a + chandra-b,
->   `OCR_CONCURRENCY=12`, mode chip `2ocr`). `llm` 컨테이너 정지.
->   **2026-09-07까지 OCR×2 유지** — LLM 모드 전환·검증은 그 이후.
-> - **wrapper 0.2.6 배포** (devlog 042; 0.2.4→0.2.5→0.2.6 같은 날): PaperMeister 인스턴스 2개가 동시에
->   OCR을 돌리자 FIFO 세마포어 때문에 한쪽이 굶는 문제 → 활성 클라이언트
->   수로 슬롯을 나누는 `_FairScheduler`. `recommended_concurrency`는 이제
->   **호출 클라이언트의 몫** (`?client_id=`로 자신을 밝히면 정확), 함께
->   `recommended_concurrency_new_client`·`client_id` 필드로 자기 설명.
-> - ⚠️ **배포 규칙**: wrapper/llmwrapper 재생성은 `up -d --no-deps` (안 그러면
->   `llm`이 딸려 뜸). nginx reload는 **이제 불필요** — 오늘 오후 nginx를
->   `resolver` + 변수 `proxy_pass`로 바꿔 wrapper IP 변경을 자동 추종
->   (IP .2→.7 강제 변경 테스트로 검증, devlog 042 §5·§8).
-> - 이미지 `honestjung/ocrwrapper:0.2.6` **Hub 푸시됨** (digest `ae338a81564b`).
->   0.2.4/0.2.5는 로컬만 (중간 단계, 푸시 불필요).
-> - OCR 워크로드 재개됨: 누적 7,823건, 오늘 두 클라이언트 동시 사용.
+> - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 오늘
+>   03:51 UTC 정상 재부팅 (systemd Shutting down, 크래시 아님).
+> - **모드**: 사실상 **OCR×1** (`1ocr`). `chandra-b` 는 05:38 UTC 의도적
+>   정지, GPU 1 은 별도 python 작업(28.8GB, 99%)이 쓰는 중. `.env`
+>   `OCR_CONCURRENCY=6`. `llm` 정지. LLM 모드 실검증은 아직 안 함.
+> - **오늘 사고 (devlog 043)**: chandra-b 정지 후 wrapper 재생성 →
+>   wrapper 가 chandra-b 의 옛 IP `172.18.0.3` 을 받음 → nginx 정적
+>   upstream 이 그 IP 로 OCR 요청을 보내 wrapper 가 404 → 05:40~07:53
+>   페이지 3,765건 실패, job 13건 `done_with_errors`. **PaperMeister 쪽
+>   `force` 재제출 필요** (서버 자동 재처리 없음).
+> - **고침 (배포됨, 09:40 UTC)**: `nginx.ocr.conf`/`nginx.llm.conf` 의
+>   `upstream chandra` 를 `zone chandra 64k` + `server ... resolve` 로.
+>   chandra 컨테이너 껐다 켜기에 nginx reload 불필요, 이름 없어도 nginx
+>   기동됨. chandra-b 부재 중엔 에러 로그에 30초마다 `could not be
+>   resolved` 노이즈 — 정상.
+> - ⚠️ **배포 규칙** (유지): wrapper/llmwrapper 재생성은 `up -d --no-deps`.
+>   `nginx.conf` 를 **에디터/`mv` 로 교체하지 말 것** — 새 inode 가 되면
+>   컨테이너는 옛 파일을 계속 읽는다 (오늘 재현). `cp` 는 in-place 라 OK,
+>   그래도 의심되면 `stat -c %i` 로 호스트·컨테이너 inode 비교.
+> - 이미지: `ocrwrapper:0.2.6`, `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
 
 > **(이전 박스, 2026-07-30 — 참고용으로 남김)**
 > 07-27 이후 이틀간 호스트가 **12번 더 죽었고**(MTBF 3.8h), kdump 12건 전수
@@ -53,7 +55,21 @@
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-08-28 — wrapper 0.2.4 공평 분배 스케줄러, devlog 042)
+## 방금 한 작업 (2026-09-08 — nginx upstream resolve, devlog 043)
+
+1. **원인 조사**: `done_with_errors` 13건 전부 `404 Not Found for
+   http://nginx/v1/chat/completions`. wrapper 로그에 nginx 발
+   `POST /v1/chat/completions 404` → nginx 가 wrapper 에게 OCR 요청을
+   보내고 있었음. `docker inspect`: wrapper IP = chandra-b 의 옛 IP.
+2. **응급 조치 07:53**: chandra-a 만 있는 conf 로 nginx
+   `--no-deps --force-recreate` (reload 는 chandra-b 이름 해석 실패 +
+   inode 불일치로 불가). 이후 404 0건.
+3. **근본 조치 09:40**: `resolve` 검증(throwaway nginx + alias 컨테이너로
+   등장/소멸 테스트) 후 dev 트리 conf 수정 → `/srv/ocrserver/` 복사 →
+   reload. chandra-b 없는 상태에서 정상.
+4. 메모리 `feedback_stop_chandra_b_minimal` 정정 (IP 재사용 시 위험).
+
+## 이전 작업 (2026-08-28 — wrapper 0.2.4 공평 분배 스케줄러, devlog 042)
 
 1. **문서 정비** (`9d1ce1e`, `8861592`, `a18f219`): 다른 컴퓨터에서 호출하는
    법(`docs/ENDPOINTS.md` 「다른 컴퓨터에서 접속하기」, 서버
