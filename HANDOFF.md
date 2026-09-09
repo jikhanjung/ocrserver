@@ -3,10 +3,12 @@
 > **🟢 이 박스가 현재 상태의 전부다.**
 > - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 09-08
 >   03:51 UTC 정상 재부팅 이후 연속 가동.
-> - **모드**: **OCR×1** (`1ocr`). `chandra-b` 09-08 05:38 정지 상태 그대로.
->   **GPU 1 은 지금 완전히 비어 있음** (별도 python 작업 끝남) —
->   `docker compose up -d chandra-b` 로 OCR×2 복귀 가능. `.env`
->   `OCR_CONCURRENCY=6`. `llm` 정지. LLM 모드 실검증은 아직 안 함.
+> - **모드**: **OCR×2** (`2ocr`). 01:33 UTC `docker compose up -d chandra-b`
+>   로 복귀 (GPU 1 의 별도 python 작업 끝나서). 01:37 healthy, `/api/services`
+>   alive 2/2, nginx `resolve` 가 reload 없이 잡음 (`could not be resolved`
+>   노이즈 소멸), 양쪽 chandra 에 completions 분배 확인. `.env`
+>   `OCR_CONCURRENCY=6`. `llm` 정지. **LLM 모드 실검증은 아직 안 함**
+>   (09-07 이후 가능 — 「곧 해야 할 작업」 #0, sudo 라 사용자가 실행).
 > - **오늘 사고 (devlog 044)**: 00:54 UTC PaperMeister 가 ICC 프로파일 깨진
 >   6쪽 PDF(`Hansen ... Hemisphaerocoryphe`, hash `694ab34…`) 제출 →
 >   wrapper 세그폴트 → resume 이 같은 PDF 재렌더 → **크래시 루프 12분**
@@ -15,11 +17,16 @@
 > - **고침 (배포됨 01:06 UTC)**: `ocrwrapper:0.2.7` — 전역 `_mupdf_lock`
 >   으로 렌더 직렬화 + `jobs.resume_count` / `OCR_RESUME_MAX_ATTEMPTS=3`
 >   크래시 루프 가드. 같은 PDF 재제출 6/6 성공. Hub `0.2.7`+`latest` 푸시.
->   사고 잡 `7f775429` 는 `failed` — **PaperMeister 가 그냥 다시 올리면 됨**.
-> - **디스크**: 루트 99%→**91% (31GB 여유)**. 백업 21개를
->   `/mnt/disk1/backups/papermeister/` 로 옮김(최신 3개는 `~/backups` 에 유지).
->   hf_cache 의 미사용 Qwen3.5 27B/35B-A3B (52GB, root 소유) 는 sudo 필요 —
->   「곧 해야 할 작업」 참고.
+>   사고 잡 `7f775429` 는 `failed`. PaperMeister 가 01:26 UTC 에 같은 파일을
+>   재제출(`e610f7e2`) → **6/6 done**. 사고 종결.
+> - **디스크**: 루트 99%→**76% (82GB 여유)**. 백업 21개를
+>   `/mnt/disk1/backups/papermeister/` 로 옮김(최신 3개는 `~/backups` 에 유지),
+>   01:12 UTC 사용자가 hf_cache 의 Qwen3.5 27B/35B-A3B (52GB) 를
+>   `/mnt/disk1/hf_cache_unused/` 로 이동 완료. 매일 04:00 KST 의
+>   `~/backups/papermeister-*.db.gz` 는 **kopri_desktop(172.16.116.151) 이
+>   ssh/scp 로 밀어넣는 것** (sshd 로그 19:04 UTC 확인) — 이 호스트엔
+>   cron/timer/컨테이너 없음. `~/backups` 를 disk1 로 심링크하면 해결
+>   (「곧 해야 할 작업」).
 > - ⚠️ **배포 규칙** (유지): wrapper/llmwrapper 재생성은 `up -d --no-deps`.
 >   `nginx.conf` 를 **에디터/`mv` 로 교체하지 말 것** (inode 고정). `cp` OK.
 > - 이미지: `ocrwrapper:0.2.7`, `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
@@ -66,6 +73,14 @@
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
 ## 방금 한 작업 (2026-09-09 — wrapper 0.2.7, devlog 044)
+
+**후속 (01:10~01:40 UTC, 코드 변경 없음):**
+- 사용자: Qwen3.5 27B/35B-A3B 를 `/mnt/disk1/hf_cache_unused/` 로 이동 → 루트 76%.
+- PaperMeister 가 Hansen PDF 재제출 (`e610f7e2`) → 6/6 done. 사고 044 종결.
+- `~/backups` 일일 백업 출처 규명: kopri_desktop(172.16.116.151) 이 19:04 UTC
+  에 ssh 키 `jikhanjung@kopri_desktop` 으로 접속해 scp. 이 호스트엔 cron/timer
+  /컨테이너 어디에도 없음. 심링크 처리는 사용자 몫 (「곧 해야 할 작업」).
+- `chandra-b` 기동 → OCR×2 복귀. 상단 박스 참고.
 
 1. **상태 점검**: wrapper `Restarting (139)` RestartCount 11, 커널
    `uvicorn: segfault at 0 ip 0` × 11 (CPU 0~15 분산, 코어 5 무관).
@@ -803,20 +818,19 @@ llm          vllm/vllm-openai:latest       Exited
 
 **2026-09-09 추가:**
 
-- **PaperMeister**: 잡 `7f775429` (`Hansen ... Hemisphaerocoryphe`) 는 `failed`.
-  같은 파일을 다시 올리면 됨 (0.2.7 에서 6/6 성공 확인). 서버 쪽 조치 없음.
-- **hf_cache 정리 (sudo 필요, 52GB)**: Qwen3.5 27B / 35B-A3B 는 실험 후 미사용.
+- ~~**PaperMeister** 잡 `7f775429` 재제출~~ → **완료** (01:26 UTC `e610f7e2` 6/6 done).
+- ~~**hf_cache 정리 (Qwen3.5 52GB)**~~ → **완료** (01:12 UTC, `/mnt/disk1/hf_cache_unused/`).
+  남은 후보: `models--Qwen--Qwen3-14B` (28GB, 옛 LLM 모델 — compose 는 32B-AWQ 를 씀).
+  확실히 안 쓰면 같은 방식으로 `sudo mv`.
+- **`~/backups` 를 disk1 로 심링크** (sudo 불필요, 사용자가 실행): 백업은
+  kopri_desktop 이 매일 19:04 UTC 에 scp 로 밀어넣는다 (sshd 로그 확인). 데스크톱
+  쪽 스크립트를 안 건드리고 서버에서 경로만 돌리는 방법:
   ```bash
-  sudo mv /srv/ocrserver/hf_cache/hub/models--Qwen--Qwen3.5-27B-GPTQ-Int4 \
-          /srv/ocrserver/hf_cache/hub/models--Qwen--Qwen3.5-35B-A3B-GPTQ-Int4 \
-          /mnt/disk1/hf_cache_unused/
+  mv -n ~/backups/*.db.gz /mnt/disk1/backups/papermeister/ && rmdir ~/backups \
+    && ln -s /mnt/disk1/backups/papermeister ~/backups && ls -la ~/backups/
   ```
-  Qwen3-14B (28GB) 는 옛 LLM 모델 — compose 는 32B-AWQ 를 씀. 확실히 안 쓰면 같이.
-- **`~/backups` 쓰는 잡 확인**: 매일 04:00 `papermeister-*.db.gz` 가 생기는데
-  사용자 crontab 엔 없음 (root cron 또는 PaperMeister 컨테이너 추정). 루트를
-  다시 채우지 않게 출력 경로를 `/mnt/disk1/backups/papermeister/` 로 바꾸는 게 좋다.
-- **OCR×2 복귀**: GPU 1 비어 있으므로 `cd /srv/ocrserver && docker compose up -d chandra-b`
-  하면 됨 (nginx 는 `resolve` 라 reload 불필요). 필요할 때.
+  다음날 19:05 UTC 이후 `ls -la ~/backups/` 로 새 파일이 disk1 에 떨어졌는지 확인.
+- ~~**OCR×2 복귀**~~ → **완료** (01:33 UTC `docker compose up -d chandra-b`, 아래 모드 참고).
 
 **2026-08-28 추가:**
 
