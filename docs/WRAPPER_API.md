@@ -437,6 +437,7 @@ for page in job["pages"]:
 | `OCR_CONCURRENCY` | `12` | wrapper의 in-flight semaphore. vLLM에 동시 전송할 최대 페이지 수 |
 | `OCR_DPI` | `150` | PDF 렌더링 해상도 |
 | `OCR_MAX_PAGE_PX` | `2200` | 페이지 longest side 픽셀 상한. 초과 시 비례 축소 (vLLM `max_model_len` 보호) |
+| `OCR_RESUME_MAX_ATTEMPTS` | `3` | 기동 시 `processing` job 을 재개(resume)하는 최대 횟수. 초과하면 `failed` (`resume aborted: ...`) — 렌더 중 프로세스가 죽는 PDF 가 무한 재시작 루프를 만들지 않게 (0.2.7, devlog 044) |
 | `OCR_BACKENDS` | `chandra-a,chandra-b` | health 프로브 대상 backend 컨테이너명(쉼표 구분) |
 | `OCR_BACKEND_PORT` | `8000` | 각 backend의 health 포트 |
 | `OCR_PER_BACKEND_CONCURRENCY` | `6` | backend 1개당 동시성. 사용 가능 슬롯 = `min(OCR_CONCURRENCY, alive × 이 값)`, 이를 활성 클라이언트 수로 나눈 것이 `recommended_concurrency` |

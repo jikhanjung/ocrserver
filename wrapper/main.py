@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import os
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -38,6 +39,18 @@ COMPOSE_PATH = os.getenv("COMPOSE_PATH", "/etc/ocrserver-compose.yml")
 MODE_TOKEN = os.getenv("MODE_TOKEN", "")  # empty disables /api/mode entirely
 MODE_REQUEST_PATH = os.getenv("MODE_REQUEST_PATH", "/data/mode_request")
 _RETRY_DELAYS = [5, 15, 30, 60]
+# Give up resuming a 'processing' job after this many wrapper restarts. A PDF
+# that crashes the process (segfault) would otherwise be re-spawned by the
+# lifespan resume on every restart → infinite crash loop (2026-09-09, devlog 044).
+RESUME_MAX_ATTEMPTS = int(os.getenv("OCR_RESUME_MAX_ATTEMPTS", "3"))
+
+# PyMuPDF/MuPDF is not thread-safe (its docs say so outright). Concurrent
+# fitz.open()+render from several to_thread workers usually gets away with it,
+# but a PDF with a broken ICC profile ("cmsOpenProfileFromMem failed") races in
+# MuPDF's colorspace init and segfaults the whole process (ip=0, 2/3 runs).
+# Serialize every MuPDF call. Rendering is ~100 ms/page vs seconds of OCR, so
+# one lock costs nothing in throughput, and waiters release the GIL.
+_mupdf_lock = threading.Lock()
 
 # When True, the host-side switcher is about to recreate this wrapper container.
 # /ocr POST rejects new jobs while this is set so we don't accept work that the
@@ -191,6 +204,8 @@ async def db_init() -> None:
         await _db.execute("ALTER TABLE jobs ADD COLUMN file_hash TEXT")
     if "client_id" not in cols:
         await _db.execute("ALTER TABLE jobs ADD COLUMN client_id TEXT")
+    if "resume_count" not in cols:
+        await _db.execute("ALTER TABLE jobs ADD COLUMN resume_count INTEGER DEFAULT 0")
     async with _db.execute("PRAGMA table_info(pages)") as c:
         page_cols = {row[1] for row in await c.fetchall()}
     if "completed_at" not in page_cols:
@@ -1219,27 +1234,29 @@ def _pdf_page_count(pdf_bytes: bytes) -> int:
     """Open the PDF just long enough to read page count. Cheap (~ms even for
     big PDFs) but still wrapped in to_thread when called so we don't pay even
     that on the event loop."""
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    try:
-        return len(doc)
-    finally:
-        doc.close()
+    with _mupdf_lock:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        try:
+            return len(doc)
+        finally:
+            doc.close()
 
 
 def _render_one_page(pdf_bytes: bytes, page_num: int) -> str:
     """Render a single page to base64-JPEG. Called from inside _ocr_page so
     render concurrency naturally caps at the OCR scheduler (CONCURRENCY) —
     no separate render burst, no need for a render-only semaphore."""
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    try:
-        page = doc[page_num]
-        long_pt = max(page.rect.width, page.rect.height)
-        dpi = min(DPI, MAX_PAGE_PX * 72 / long_pt) if long_pt > 0 else DPI
-        zoom = dpi / 72
-        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-        return base64.b64encode(pix.tobytes("jpeg")).decode()
-    finally:
-        doc.close()
+    with _mupdf_lock:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        try:
+            page = doc[page_num]
+            long_pt = max(page.rect.width, page.rect.height)
+            dpi = min(DPI, MAX_PAGE_PX * 72 / long_pt) if long_pt > 0 else DPI
+            zoom = dpi / 72
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+            return base64.b64encode(pix.tobytes("jpeg")).decode()
+        finally:
+            doc.close()
 
 
 async def _run(job_id: str, pdf_bytes: bytes, skip_pages: set[int] | None = None) -> None:
@@ -1280,8 +1297,8 @@ async def _resume_processing_jobs() -> None:
     """On wrapper startup, re-spawn _run for any DB row stuck in 'processing'.
     Pages already marked 'ok' are skipped; failed/missing pages are re-rendered."""
     async with _db.execute(
-        "SELECT job_id, filename, file_hash, client_id, total_pages, submitted_at "
-        "FROM jobs WHERE status='processing'"
+        "SELECT job_id, filename, file_hash, client_id, total_pages, submitted_at, "
+        "resume_count FROM jobs WHERE status='processing'"
     ) as c:
         rows = [dict(r) for r in await c.fetchall()]
 
@@ -1299,6 +1316,14 @@ async def _resume_processing_jobs() -> None:
                                 error=f"resume failed: missing {path}",
                                 completed_at=time.time())
             continue
+        attempts = row.get("resume_count") or 0
+        if attempts >= RESUME_MAX_ATTEMPTS:
+            msg = (f"resume aborted: wrapper restarted {attempts}x while this job was "
+                   f"processing (crash-loop guard, OCR_RESUME_MAX_ATTEMPTS={RESUME_MAX_ATTEMPTS})")
+            await db_update_job(jid, status="failed", error=msg, completed_at=time.time())
+            print(f"[resume] gave up on {jid} ({row['filename']}): {msg}", flush=True)
+            continue
+        await db_update_job(jid, resume_count=attempts + 1)
 
         # Restore page-level state from DB
         async with _db.execute(

@@ -1,26 +1,36 @@
-# HANDOFF — 2026-09-08 (nginx upstream `resolve`; chandra-b 정지 중 IP 재사용 사고)
+# HANDOFF — 2026-09-09 (wrapper 0.2.7: MuPDF 스레드 레이스 세그폴트 → 크래시 루프)
 
 > **🟢 이 박스가 현재 상태의 전부다.**
-> - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 오늘
->   03:51 UTC 정상 재부팅 (systemd Shutting down, 크래시 아님).
-> - **모드**: 사실상 **OCR×1** (`1ocr`). `chandra-b` 는 05:38 UTC 의도적
->   정지, GPU 1 은 별도 python 작업(28.8GB, 99%)이 쓰는 중. `.env`
+> - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 09-08
+>   03:51 UTC 정상 재부팅 이후 연속 가동.
+> - **모드**: **OCR×1** (`1ocr`). `chandra-b` 09-08 05:38 정지 상태 그대로.
+>   **GPU 1 은 지금 완전히 비어 있음** (별도 python 작업 끝남) —
+>   `docker compose up -d chandra-b` 로 OCR×2 복귀 가능. `.env`
 >   `OCR_CONCURRENCY=6`. `llm` 정지. LLM 모드 실검증은 아직 안 함.
-> - **오늘 사고 (devlog 043)**: chandra-b 정지 후 wrapper 재생성 →
->   wrapper 가 chandra-b 의 옛 IP `172.18.0.3` 을 받음 → nginx 정적
->   upstream 이 그 IP 로 OCR 요청을 보내 wrapper 가 404 → 05:40~07:53
->   페이지 3,765건 실패, job 13건 `done_with_errors`. **PaperMeister 쪽
->   `force` 재제출 필요** (서버 자동 재처리 없음).
-> - **고침 (배포됨, 09:40 UTC)**: `nginx.ocr.conf`/`nginx.llm.conf` 의
->   `upstream chandra` 를 `zone chandra 64k` + `server ... resolve` 로.
->   chandra 컨테이너 껐다 켜기에 nginx reload 불필요, 이름 없어도 nginx
->   기동됨. chandra-b 부재 중엔 에러 로그에 30초마다 `could not be
->   resolved` 노이즈 — 정상.
+> - **오늘 사고 (devlog 044)**: 00:54 UTC PaperMeister 가 ICC 프로파일 깨진
+>   6쪽 PDF(`Hansen ... Hemisphaerocoryphe`, hash `694ab34…`) 제출 →
+>   wrapper 세그폴트 → resume 이 같은 PDF 재렌더 → **크래시 루프 12분**
+>   (재시작 11회, OCR 전면 502). 원인: PyMuPDF 는 스레드 세이프 아님, 워커
+>   6개 동시 `fitz.open` 이 MuPDF 컬러스페이스 초기화에서 레이스.
+> - **고침 (배포됨 01:06 UTC)**: `ocrwrapper:0.2.7` — 전역 `_mupdf_lock`
+>   으로 렌더 직렬화 + `jobs.resume_count` / `OCR_RESUME_MAX_ATTEMPTS=3`
+>   크래시 루프 가드. 같은 PDF 재제출 6/6 성공. Hub `0.2.7`+`latest` 푸시.
+>   사고 잡 `7f775429` 는 `failed` — **PaperMeister 가 그냥 다시 올리면 됨**.
+> - **디스크**: 루트 99%→**91% (31GB 여유)**. 백업 21개를
+>   `/mnt/disk1/backups/papermeister/` 로 옮김(최신 3개는 `~/backups` 에 유지).
+>   hf_cache 의 미사용 Qwen3.5 27B/35B-A3B (52GB, root 소유) 는 sudo 필요 —
+>   「곧 해야 할 작업」 참고.
 > - ⚠️ **배포 규칙** (유지): wrapper/llmwrapper 재생성은 `up -d --no-deps`.
->   `nginx.conf` 를 **에디터/`mv` 로 교체하지 말 것** — 새 inode 가 되면
->   컨테이너는 옛 파일을 계속 읽는다 (오늘 재현). `cp` 는 in-place 라 OK,
->   그래도 의심되면 `stat -c %i` 로 호스트·컨테이너 inode 비교.
-> - 이미지: `ocrwrapper:0.2.6`, `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
+>   `nginx.conf` 를 **에디터/`mv` 로 교체하지 말 것** (inode 고정). `cp` OK.
+> - 이미지: `ocrwrapper:0.2.7`, `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
+
+> **(이전 박스, 2026-09-08 — nginx upstream resolve, devlog 043)**
+> - chandra-b 정지 후 wrapper 재생성 → wrapper 가 chandra-b 의 옛 IP
+>   `172.18.0.3` 을 받음 → nginx 정적 upstream 이 그 IP 로 OCR 요청 →
+>   wrapper 404 → 05:40~07:53 페이지 3,765건 실패, job 13건 `done_with_errors`.
+>   고침: `upstream chandra` 를 `zone` + `server ... resolve` 로 (09:40 배포).
+>   chandra-b 부재 중엔 nginx 에러 로그에 30초마다 `could not be resolved`
+>   노이즈 — 정상.
 
 > **(이전 박스, 2026-07-30 — 참고용으로 남김)**
 > 07-27 이후 이틀간 호스트가 **12번 더 죽었고**(MTBF 3.8h), kdump 12건 전수
@@ -55,7 +65,29 @@
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-09-08 — nginx upstream resolve, devlog 043)
+## 방금 한 작업 (2026-09-09 — wrapper 0.2.7, devlog 044)
+
+1. **상태 점검**: wrapper `Restarting (139)` RestartCount 11, 커널
+   `uvicorn: segfault at 0 ip 0` × 11 (CPU 0~15 분산, 코어 5 무관).
+   DB 의 유일한 `processing` 잡 = 00:54 제출된 6쪽 PDF, 매 재시작마다
+   `[resume] re-spawned 1` 직후 `cmsOpenProfileFromMem failed` → 죽음.
+2. **재현**: 원샷 `ocrwrapper:0.2.6` 컨테이너에서 순차 렌더 6/6 OK, 6스레드
+   동시 렌더 3회 중 2회 exit 139 (나머지 1회도 `FzErrorFormat` 1쪽).
+3. **응급**: 사용자가 원샷 컨테이너 SQL 로 잡 `7f775429` → `failed`. 루프 종료.
+4. **0.2.7**: `wrapper/main.py` — `_mupdf_lock`(`threading.Lock`) 으로
+   `_pdf_page_count`·`_render_one_page` 직렬화; `jobs.resume_count` 컬럼
+   (ALTER 자동), `_resume_processing_jobs` 가 `OCR_RESUME_MAX_ATTEMPTS`(3)
+   초과 시 `failed` 처리. 새 이미지 6스레드×5회 전부 OK.
+5. **배포**: compose 두 곳 0.2.7 → `/srv/ocrserver/` 복사 →
+   `up -d --no-deps wrapper llmwrapper`. `/api/services` 200, `_meta.images`
+   0.2.7. 같은 PDF 를 `client_id=claude-verify-044` 로 재제출 → 6/6 ok.
+   Hub `0.2.7` + `latest` 푸시 (digest `6068e4fb…`).
+6. **디스크**: `docker builder prune -af`(4.7GB) + dangling + 0.2.1~0.2.5
+   태그 제거, `~/backups` 21개 → `/mnt/disk1/backups/papermeister/`.
+   99% → 91%.
+7. `docs/WRAPPER_API.md` 환경변수 표에 `OCR_RESUME_MAX_ATTEMPTS`.
+
+## 이전 작업 (2026-09-08 — nginx upstream resolve, devlog 043)
 
 1. **원인 조사**: `done_with_errors` 13건 전부 `404 Not Found for
    http://nginx/v1/chat/completions`. wrapper 로그에 nginx 발
@@ -688,19 +720,20 @@ PaperMeister 가 60s 타임아웃으로 POST /ocr 이 5건 연속 실패한 인�
 - CPU 는 중고 **i7-7820X**, BIOS **F1 / 2017-07-04** (미업데이트, 후순위).
   마이크로코드는 OS 가 `0x2007006` 로드 중 (`intel-microcode` 패키지).
 
-### 컨테이너 / 이미지 (운영서버) — 2026-08-28 08:32 UTC 확인
+### 컨테이너 / 이미지 (운영서버) — 2026-09-09 01:10 UTC 확인
 ```
 SERVICE      IMAGE                         STATUS
 chandra-a    honestjung/ocrserver:0.1.1    Up (healthy, GPU 0, 42.8GB)
-chandra-b    honestjung/ocrserver:0.1.1    Up (healthy, GPU 1, 42.8GB) — 03:50 기동
-nginx        nginx:alpine                  Up (nginx.ocr.conf, resolver 방식, 08:56 reload)
-wrapper      honestjung/ocrwrapper:0.2.6   Up (WRAPPER_ROLE=ocr, OCR_CONCURRENCY=12)
-llmwrapper   honestjung/ocrwrapper:0.2.6   Up (WRAPPER_ROLE=llm; upstream llm 정지라 /llm/* 502)
-llm          vllm/vllm-openai:latest       Exited (OCR×2 모드)
+chandra-b    honestjung/ocrserver:0.1.1    Exited (0) — 09-08 05:38 의도적 정지, GPU 1 은 현재 비어 있음
+nginx        nginx:alpine                  Up (nginx.ocr.conf, resolver + upstream resolve)
+wrapper      honestjung/ocrwrapper:0.2.7   Up (WRAPPER_ROLE=ocr, OCR_CONCURRENCY=6, 01:06 재생성)
+llmwrapper   honestjung/ocrwrapper:0.2.7   Up (WRAPPER_ROLE=llm; upstream llm 정지라 /llm/* 502)
+llm          vllm/vllm-openai:latest       Exited
 ```
-현재 부팅은 **2026-08-28 03:14:43 UTC** 시작 (직전 부팅 정상 종료).
-`ocrwrapper:0.2.6`은 Hub에 있음 (`docker pull` 가능). 0.2.4/0.2.5는 로컬만. 0.2.3으로 되돌리려면
-compose 태그만 바꾸면 됨 (이미지 로컬 보유).
+현재 부팅은 **2026-09-08 03:51:58 UTC** 시작 (직전 부팅 정상 종료).
+`ocrwrapper:0.2.6`·`0.2.7`·`latest`(=0.2.7) 는 Hub 에 있음. 0.2.1~0.2.5 로컬 태그는
+디스크 정리로 삭제. 되돌리려면 compose 태그를 0.2.6 으로 (로컬 보유).
+루트 디스크 91% (31GB 여유) — 09-09 정리 후.
 
 ### 워크로드 현황 (2026-08-28)
 - **OCR: 재개.** PaperMeister 인스턴스 2개(`papermeister-7355a25d`,
@@ -767,6 +800,23 @@ compose 태그만 바꾸면 됨 (이미지 로컬 보유).
   3DGS) 는 `done_with_errors` 로 reconcile 됨. 사용자가 재업로드 필요.
 
 ## 곧 해야 할 작업
+
+**2026-09-09 추가:**
+
+- **PaperMeister**: 잡 `7f775429` (`Hansen ... Hemisphaerocoryphe`) 는 `failed`.
+  같은 파일을 다시 올리면 됨 (0.2.7 에서 6/6 성공 확인). 서버 쪽 조치 없음.
+- **hf_cache 정리 (sudo 필요, 52GB)**: Qwen3.5 27B / 35B-A3B 는 실험 후 미사용.
+  ```bash
+  sudo mv /srv/ocrserver/hf_cache/hub/models--Qwen--Qwen3.5-27B-GPTQ-Int4 \
+          /srv/ocrserver/hf_cache/hub/models--Qwen--Qwen3.5-35B-A3B-GPTQ-Int4 \
+          /mnt/disk1/hf_cache_unused/
+  ```
+  Qwen3-14B (28GB) 는 옛 LLM 모델 — compose 는 32B-AWQ 를 씀. 확실히 안 쓰면 같이.
+- **`~/backups` 쓰는 잡 확인**: 매일 04:00 `papermeister-*.db.gz` 가 생기는데
+  사용자 crontab 엔 없음 (root cron 또는 PaperMeister 컨테이너 추정). 루트를
+  다시 채우지 않게 출력 경로를 `/mnt/disk1/backups/papermeister/` 로 바꾸는 게 좋다.
+- **OCR×2 복귀**: GPU 1 비어 있으므로 `cd /srv/ocrserver && docker compose up -d chandra-b`
+  하면 됨 (nginx 는 `resolve` 라 reload 불필요). 필요할 때.
 
 **2026-08-28 추가:**
 
