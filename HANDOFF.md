@@ -1,14 +1,17 @@
-# HANDOFF — 2026-09-09 (wrapper 0.2.7: MuPDF 스레드 레이스 세그폴트 → 크래시 루프)
+# HANDOFF — 2026-09-14 (GPU 1 예산제: OCR×1 + LLM 0.60, devlog 045)
 
 > **🟢 이 박스가 현재 상태의 전부다.**
 > - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 09-08
 >   03:51 UTC 정상 재부팅 이후 연속 가동.
-> - **모드**: **OCR×2** (`2ocr`). 01:33 UTC `docker compose up -d chandra-b`
->   로 복귀 (GPU 1 의 별도 python 작업 끝나서). 01:37 healthy, `/api/services`
->   alive 2/2, nginx `resolve` 가 reload 없이 잡음 (`could not be resolved`
->   노이즈 소멸), 양쪽 chandra 에 completions 분배 확인. `.env`
->   `OCR_CONCURRENCY=6`. `llm` 정지. **LLM 모드 실검증은 아직 안 함**
->   (09-07 이후 가능 — 「곧 해야 할 작업」 #0, sudo 라 사용자가 실행).
+> - **모드**: **OCR×1 + LLM** (`llm+ocr`), 09-14 09:30 UTC `mode-llm.sh` 로 전환.
+>   **GPU 1 예산제 (devlog 045)**: `llm` 이 `LLM_GPU_UTIL=0.60` 만 선점(29.9GB,
+>   KV 39k tokens), **~19GB 는 FigEx / dolfinserver2 학습 공용**. 값은
+>   `/srv/ocrserver/.env` (`LLM_GPU_UTIL`, `LLM_MAX_MODEL_LEN=16384`). 긴 detect
+>   학습날은 0.45 로 내려 `docker compose --profile llm up -d llm`. **기동 순서는
+>   llm 먼저, 배치는 뒤** (vLLM free-memory 검사). `chandra-b` 정지, `.env`
+>   `OCR_CONCURRENCY=6`. OCR 밀리면 `mode-ocr.sh` 로 OCR×2 (예외 경로).
+>   **LLM 모드 실검증 완료**: `/llm/` resolver rewrite 경로 OK(1.7s), OCR 15/15,
+>   GPU 1 에 15GB 외부 할당+연산 중에도 LLM 1.2s 응답.
 > - **오늘 사고 (devlog 044)**: 00:54 UTC PaperMeister 가 ICC 프로파일 깨진
 >   6쪽 PDF(`Hansen ... Hemisphaerocoryphe`, hash `694ab34…`) 제출 →
 >   wrapper 세그폴트 → resume 이 같은 PDF 재렌더 → **크래시 루프 12분**
@@ -72,7 +75,18 @@
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-09-09 — wrapper 0.2.7, devlog 044)
+## 방금 한 작업 (2026-09-14 — GPU 1 예산제 + LLM 모드 전환, devlog 045)
+
+- 결정: GPU 0 = OCR 전용, **GPU 1 = llm(상주, 0.60) + 배치 작업 공용**.
+  MIG 불가(Turing), 컨테이너 스왑·MPS 는 안 함.
+- `docker-compose.yml` llm: `${LLM_GPU_UTIL:-0.60}`, `${LLM_MAX_MODEL_LEN:-16384}`.
+  `.env` 에 두 값 추가. `mode-llm.sh` 가 `.env` 읽어 값 표시 + llmwrapper 도 기동.
+- `./mode-llm.sh` (sudo 불필요했음 — 파일·docker 전부 jikhanjung 권한) → 검증 4종
+  통과 (devlog 045 §검증). 실측: 가중치 18.1GiB + KV 9.6GiB = 29.9GB, 여유 ~19GB.
+- 같은 날 앞서: fsis2026 의 Astra 도판→패널 분할 도구를 `scripts/subfigure/`,
+  `docs/subfigure/`, `docs/SUBFIGURE_SPLIT.md` 로 가져옴 (커밋 f10aacd).
+
+## 이전 작업 (2026-09-09 — wrapper 0.2.7, devlog 044)
 
 **후속 (01:10~01:40 UTC, 코드 변경 없음):**
 - 사용자: Qwen3.5 27B/35B-A3B 를 `/mnt/disk1/hf_cache_unused/` 로 이동 → 루트 76%.
@@ -816,6 +830,13 @@ llm          vllm/vllm-openai:latest       Exited
 
 ## 곧 해야 할 작업
 
+**2026-09-14 추가:**
+
+- **GPU 1 공유 첫 실사용 관찰**: FigEx 나 dolfinserver2 학습을 실제로 llm 과
+  같이 돌려 보고 LLM 응답 지연이 거슬리는지 본다. 거슬리면 MPS 검토
+  (`nvidia-cuda-mps-control -d`) 또는 긴 학습은 밤에. detect 학습(17h) 은
+  `LLM_GPU_UTIL=0.45` 로 내리고 llm 재기동 후 시작.
+
 **2026-09-09 추가:**
 
 - ~~**PaperMeister** 잡 `7f775429` 재제출~~ → **완료** (01:26 UTC `e610f7e2` 6/6 done).
@@ -834,7 +855,7 @@ llm          vllm/vllm-openai:latest       Exited
 
 **2026-08-28 추가:**
 
-0. **LLM 모드 실검증 — 2026-09-07 이후** (사용자 지정; 그 전엔 OCR×2 유지).
+0. ~~**LLM 모드 실검증**~~ → **완료 2026-09-14** (devlog 045). 아래는 기록용.
    `sudo /srv/ocrserver/mode-llm.sh` 후 `curl http://localhost:8080/llm/health`
    (200), `/llm/v1/chat/completions` 짧은 요청 1건, `/status`의 LLM 카드.
    확인 대상은 resolver 전환된 `nginx.llm.conf`의 `/llm/` `rewrite` 경로
