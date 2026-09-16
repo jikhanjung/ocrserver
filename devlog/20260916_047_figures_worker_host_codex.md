@@ -56,9 +56,14 @@ journalctl -u ocrserver-figures-worker -f      # "figures_worker 0.3.0 id=jikhan
 `/srv/ocrserver/scripts` 가 root 소유라 cp 도 sudo. 유닛은 `EnvironmentFile=/srv/ocrserver/.env`(토큰) + `User=jikhanjung`(codex 로그인).
 확인: `/status` 카드가 "대기 (idle)" 로 바뀌고 `GET /api/figures` 의 `worker.worker_id` 가 호스트명.
 
+## 추가 (같은 날 밤) — wrapper 0.3.3: 종료 시 즉시 재큐
+
+- `POST /internal/figures/items/{id}/release` — 처리 중 항목을 **시도 환불**하며 큐로 되돌린다. 워커는 SIGTERM 을 받으면 codex
+  프로세스 그룹을 죽이고 release 를 보낸 뒤 종료한다. 실측: 40 s 진행 중이던 세션에 SIGTERM → 4 s 안에 `release`, 다음 워커가
+  attempt=1 로 다시 집었다. → **재시작 시점을 가릴 필요가 없어졌다.** 스모크 60 checks.
+- 0.3.2 (같은 날): detect 항목 쪽 단위 `hint_boxes[]` (PaperMeister 099 §4).
+
 ## 남은 것
 
-- 워커가 SIGTERM 으로 죽으면 처리 중 항목은 heartbeat 1800 s 뒤에야 재큐된다. 종료 시 `failed` 를 보내면 시도가 소모되니
-  그대로 두되, 배포 재시작은 항목 사이(`sleeping`) 에 하는 게 좋다 (`systemctl restart` 전에 `/status` 확인).
 - detect·link 의 **실제 프롬프트**는 PaperMeister G 단계에서 온다. 여기서 쓴 detect 프롬프트는 e2e 용이며 저장소에 두지 않았다.
 - `pages_consulted` 는 스키마에 있어야 온다 (클라이언트 계획 §10.3).

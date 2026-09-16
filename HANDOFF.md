@@ -32,12 +32,12 @@
 >   (「곧 해야 할 작업」).
 > - ⚠️ **배포 규칙** (유지): wrapper/llmwrapper 재생성은 `up -d --no-deps`.
 >   `nginx.conf` 를 **에디터/`mv` 로 교체하지 말 것** (inode 고정). `cp` OK.
-> - **도판 분할 (devlog 046·047)**: wrapper **0.3.2** (0.3.1 + detect 항목 쪽 단위 `hint_boxes[]`, PaperMeister 099 §4) — `/pdfs`, `/figures/*`, `/api/figures`, `/internal/figures/*`.
+> - **도판 분할 (devlog 046·047)**: wrapper **0.3.3** (0.3.2: detect 항목 쪽 단위 `hint_boxes[]` · 0.3.3: 종료 시 `release` 로 즉시 재큐) — `/pdfs`, `/figures/*`, `/api/figures`, `/internal/figures/*`.
 >   호스트 워커 `scripts/figures_worker.py` 는 **e2e 통과**(panels 70 s · detect 95 s, Astra 가 힌트 상자를 chandra 값 3‰ 안으로
 >   보정) 했지만 **systemd 유닛은 아직 설치 안 됨 — sudo 4줄, devlog 047 §설치**. 설치 전엔 `/figures/*` 잡이 큐에만 쌓인다.
 >   `.env`: `FIGURES_WORKER_TOKEN`, `FIGURES_MIN_INTERVAL=300`. nginx `/internal/` 은 loopback+172.18/16 만.
 >   OCR 경로 무변 (회귀 15/15). 스모크 56 checks. e2e 산출물은 `/srv/ocrserver/figure_ws/510ea212…/`(3.6MB, 7일 TTL).
-> - 이미지: `ocrwrapper:0.3.2`, `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
+> - 이미지: `ocrwrapper:0.3.3`, `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
 
 > **(이전 박스, 2026-09-08 — nginx upstream resolve, devlog 043)**
 > - chandra-b 정지 후 wrapper 재생성 → wrapper 가 chandra-b 의 옛 IP
@@ -866,7 +866,7 @@ llm          vllm/vllm-openai:latest       Exited
 - **PaperMeister 진행 대조 (09-16 밤)**: A·B·C·D′·D 완료, **E 진행 중**. 099 §4 의 detect 계약 변경(쪽 단위 항목 + `hint_boxes[]`
   + 쪽 의심 자리표시 행 + verdict `merge`)은 서버 0.3.2·워커에 반영됨. 서버가 더 기다리는 건 G 의 명세 v2·프롬프트 3벌.
 - **워커 유닛 설치 (sudo, 사용자)** — devlog 047 §설치 4줄. 그 뒤 `/status` 카드가 "대기 (idle)", `journalctl -u ocrserver-figures-worker -f`.
-- **워커 재시작 규칙**: 항목 처리 중(`running`) 에 `systemctl restart` 하면 그 항목은 heartbeat 1800 s 뒤에야 재큐. `sleeping`/`idle` 일 때 할 것.
+- ~~워커 재시작 규칙~~ → 0.3.3 부터 SIGTERM 시 항목을 즉시 release (시도 환불). 아무 때나 재시작해도 된다.
 - ✅ **PaperMeister G 완료 (09-16 밤, PaperMeister `a77bd64`)** — `docs/figure_server_spec_v2.md`(항목 내용·응답 스키마, **wrapper 0.3.2 전송 형식에 맞춤**: `items[].key` · link는 논문당 항목 하나 · detect 항목은
   `page`+`hint_boxes`+`figure_keys` 옆에 모델용 `figures[]`·`reasons`·`hints`) + `papermeister/figure_prompts/`(detect·link·panels `.md`+`.schema.json`, 요청에 실려 오므로 복사 불필요;
   스키마는 required 전부·additionalProperties false) + `scripts/link_figures.py --dump`·`split_panels.py --dump`의 실제 요청 JSON(테스트 픽스처 후보).

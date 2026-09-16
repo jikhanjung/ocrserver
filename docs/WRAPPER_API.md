@@ -447,7 +447,7 @@ wrapper 는 접수·큐·결과 저장만 한다. 프롬프트와 결과 JSON �
 | `POST` | `/figures/{kind}/{job_id}/resume?retry_errors=` | 실패·예산 소진 항목 재큐. `retry_errors=true` 면 시도 횟수 초기화 |
 | `POST` | `/figures/worker/resume` | 치명 정지(로그인 만료·한도) 해제. 호스트에서 원인을 고친 뒤 호출 |
 | `GET` | `/api/figures` | 대시보드 요약 (워커 상태·큐·24h 호출·마지막 오류) |
-| `POST` | `/internal/figures/*` | 워커 전용. `X-Worker-Token` + nginx 에서 loopback·docker 브리지만 허용 |
+| `POST` | `/internal/figures/*` | 워커 전용 (claim · heartbeat · result · **release**(종료 시 즉시 재큐, 시도 환불) · worker/status · workspace). `X-Worker-Token` + nginx 에서 loopback·docker 브리지만 허용 |
 
 ### POST /figures/{kind}
 

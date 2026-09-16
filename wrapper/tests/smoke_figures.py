@@ -120,6 +120,13 @@ with TestClient(main.app) as c:
     ok(c.get(f"/figures/panels/{j1}").json()["status"] == "processing", "job processing after claim")
     ok(c.post(f"/internal/figures/items/{it['item_id']}/heartbeat", headers=W).status_code == 200, "heartbeat")
 
+    # ── release (worker shutdown): back to queue, attempt refunded ──
+    r = c.post(f"/internal/figures/items/{it['item_id']}/release", headers=W, json={"reason": "shutdown"})
+    ok(r.status_code == 200 and r.json()["status"] == "queued", f"release {r.text}")
+    ok(c.post(f"/internal/figures/items/{it['item_id']}/release", headers=W, json={}).status_code == 409, "double release 409")
+    r = c.post("/internal/figures/claim", json={"worker_id": "w1"}, headers=W)
+    ok(r.json()["item"]["item_id"] == it["item_id"] and r.json()["item"]["attempt"] == 1, "re-claim after release, attempt still 1")
+
     # ── result: done ──
     r = c.post(f"/internal/figures/items/{it['item_id']}/result", headers=W,
                json={"status": "done", "result": {"panels": [1, 2]}, "elapsed_s": 9.5, "usage": {"input_tokens": 10}, "model": "gpt-6-astra"})

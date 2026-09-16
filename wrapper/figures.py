@@ -775,6 +775,29 @@ async def item_heartbeat(item_id: str, x_worker_token: str | None = Header(None)
     return {"ok": True}
 
 
+@router.post("/internal/figures/items/{item_id}/release")
+async def item_release(item_id: str, payload: dict | None = None,
+                       x_worker_token: str | None = Header(None)):
+    """Worker is shutting down mid-session (systemctl stop/restart): put the
+    item straight back in the queue without spending an attempt or waiting
+    for the heartbeat timeout."""
+    _auth(x_worker_token)
+    db = _db()
+    cur = await db.execute(
+        "UPDATE figure_items SET status='queued', attempts=MAX(0, attempts-1), claimed_by=NULL, "
+        "error=? WHERE item_id=? AND status='processing'",
+        (((payload or {}).get("reason") or "released by worker"), item_id))
+    if not cur.rowcount:
+        await db.commit()
+        raise HTTPException(status_code=409, detail="item is not processing")
+    async with db.execute("SELECT job_id FROM figure_items WHERE item_id=?", (item_id,)) as c:
+        job_id = (await c.fetchone())[0]
+    await _refresh_job_status(job_id)
+    await db.execute("UPDATE figure_worker SET state='idle', last_seen=? WHERE id=1", (time.time(),))
+    await db.commit()
+    return {"item_id": item_id, "status": "queued"}
+
+
 @router.post("/internal/figures/items/{item_id}/result")
 async def item_result(item_id: str, payload: dict, x_worker_token: str | None = Header(None)):
     """Worker reports one finished attempt.

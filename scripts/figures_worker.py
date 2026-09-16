@@ -73,6 +73,7 @@ NOISE = ("failed to refresh available models", "backend-api/ps/mcp",
          "transport channel closed")
 
 _stop = False
+_current_proc = None  # codex child while a session runs; killed on SIGTERM
 
 
 def log(msg: str) -> None:
@@ -275,16 +276,22 @@ def _clean_env() -> dict:
     return env
 
 
-def _run(cmd, cwd, timeout, stdin=None):
+def _run(cmd, cwd, timeout, stdin=None, track=False):
+    global _current_proc
     p = subprocess.Popen(cmd, cwd=cwd, env=_clean_env(), stdin=subprocess.PIPE,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                          start_new_session=True)
+    if track:
+        _current_proc = p
     try:
         out, err = p.communicate(stdin, timeout=timeout)
     except subprocess.TimeoutExpired:
         os.killpg(p.pid, signal.SIGKILL)
         out, err = p.communicate()
         return None, out, err
+    finally:
+        if track:
+            _current_proc = None
     return p.returncode, out, err
 
 
@@ -328,8 +335,11 @@ def run_codex(cwd: str, prompt: str, schema: dict, images: list, model: str, eff
         cmd += ["--image", im]
     cmd += ["--output-schema", schema_path, "--output-last-message", resp_path, "--json", "-"]
     t0 = time.monotonic()
-    code, out, err = _run(cmd, cwd, timeout, stdin=prompt)
+    code, out, err = _run(cmd, cwd, timeout, stdin=prompt, track=True)
     elapsed = round(time.monotonic() - t0, 1)
+    if _stop:
+        return {"aborted": True, "elapsed": elapsed, "usage": {}, "code": code, "turn_ok": False,
+                "turn_err": [], "response": None, "stdout": out or "", "stderr": err or "", "command": cmd}
     with open(os.path.join(run_dir, "events.jsonl"), "w") as f:
         f.write(out or "")
     with open(os.path.join(run_dir, "stderr.log"), "w") as f:
@@ -471,6 +481,8 @@ def process(item: dict) -> dict:
     finally:
         hb.stop()
     base = {"elapsed_s": info["elapsed"], "usage": info["usage"] or None, "model": model}
+    if info.get("aborted"):
+        return {"status": "release", "error": "worker shutdown during session", **base}
     fr = fatal_reason(info["stdout"], info["stderr"])
     if fr:
         return {"status": "fatal", "error": f"codex: {fr} — {run_dir}", **base}
@@ -508,6 +520,12 @@ def main() -> int:
     def _sig(*_):
         global _stop
         _stop = True
+        p = _current_proc
+        if p is not None and p.poll() is None:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
     signal.signal(signal.SIGTERM, _sig)
     signal.signal(signal.SIGINT, _sig)
     log(f"figures_worker {VERSION} id={WORKER_ID} wrapper={WRAPPER_URL} ws={WS_DIR} codex={shutil.which(CODEX_BIN)}")
@@ -537,6 +555,10 @@ def main() -> int:
             res = {"status": "failed", "error": f"worker exception: {type(e).__name__}: {e}"}
         log(f"  → {res['status']} {res.get('elapsed_s', '')}s {(res.get('error') or '')[:160]}")
         try:
+            if res["status"] == "release":
+                api("POST", f"/internal/figures/items/{item['item_id']}/release",
+                    json={"reason": res.get("error")}, timeout=30)
+                break
             api("POST", f"/internal/figures/items/{item['item_id']}/result", json=res, timeout=120)
         except Exception as e:
             log(f"result post failed: {e}")
