@@ -95,7 +95,9 @@ with TestClient(main.app) as c:
     r = c.post("/figures/panels", json={**base, "items": items})
     ok(r.status_code == 202 and r.json()["queued"] == 3, f"panels submit {r.text}")
     j1 = r.json()["job_id"]
-    r = c.post("/figures/detect", json={**base, "client_id": "pm-b", "items": [{"key": "d0", "page": 0, "hint_bbox_page_1000": None, "reasons": ["no_caption"]}]})
+    r = c.post("/figures/detect", json={**base, "items": [{"key": "bad", "page": 0, "hint_boxes": [[1, 2, 3]]}]})
+    ok(r.status_code == 400 and "hint_boxes" in r.text, "detect hint_boxes validation")
+    r = c.post("/figures/detect", json={**base, "client_id": "pm-b", "items": [{"key": "d0", "page": 0, "hint_boxes": [[10, 10, 500, 500], [520, 10, 990, 500]], "figure_keys": ["f1", "f2"], "reasons": ["unmarked_plate_page"]}]})
     ok(r.status_code == 202, f"detect submit {r.text}")
     j2 = r.json()["job_id"]
     r = c.post("/figures/link", json={**base, "items": [{"key": "paper", "figures": [{"figure_id": "f1", "page": 0, "bbox_page_1000": [1, 2, 3, 4]}]}]})

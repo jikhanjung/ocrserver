@@ -463,7 +463,7 @@ wrapper 는 접수·큐·결과 저장만 한다. 프롬프트와 결과 JSON �
 
 | kind | item 필수 필드 | 선행 조건 |
 |---|---|---|
-| `detect` | `page`, `hint_bbox_page_1000` (4 ints 0..1000 또는 null) | PDF + 작업 폴더 |
+| `detect` | `page` (쪽 단위 항목, PaperMeister 099 §4), `hint_boxes` (bbox 목록, 0개 가능 — 쪽 의심 자리표시), `figure_keys` (선택, 상자와 같은 순서) | PDF + 작업 폴더 |
 | `link` | `figures: [{figure_id, page, bbox_page_1000, …}]` | PDF + 작업 폴더 |
 | `panels` | `page`, `bbox_page_1000`, `caption`, `entries` | PDF |
 
@@ -493,7 +493,7 @@ wrapper 는 접수·큐·결과 저장만 한다. 프롬프트와 결과 JSON �
 
 | kind | 작업 디렉터리(`-C`) | `--image` | INPUT JSON |
 |---|---|---|---|
-| `detect` | 논문 작업 폴더 | `items/<id>/target.png` (대상 쪽 150dpi, 힌트 상자 빨강, 쪽 번호 라벨) | `{kind, item: <요청 항목 그대로>, workspace: {pdf_pages, page_numbering:"0-based", text_dir, all_text, pages_dir, page_dpi}, target_image: {path, width, height, dpi, hint_box_drawn}}` |
+| `detect` | 논문 작업 폴더 | `items/<id>/target.png` (대상 쪽 150dpi, 힌트 상자들 빨강 + 순서 번호, 쪽 전체 상자는 안 그림, 쪽 번호 라벨) | `{kind, item: <요청 항목 그대로>, workspace: {pdf_pages, page_numbering:"0-based", text_dir, all_text, pages_dir, page_dpi}, target_image: {path, width, height, dpi, hint_box_drawn}}` |
 | `link` | 논문 작업 폴더 | 없음 | `{kind, item, workspace: {…}}` |
 | `panels` | 항목 폴더 (`figure.png` 만) | `figure.png` (bbox 크롭, `options.dpi` 기본 216, 긴 변 4000px 상한) | `{kind, item, image: {path, width, height, dpi, pdf_clip_xyxy_points}, image_width, image_height, original_caption, existing_subfigures}` — 뒤 넷은 fsis `astra_panels.py` 프롬프트 호환 |
 

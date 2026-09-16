@@ -230,11 +230,21 @@ def _validate_item(kind: str, item) -> str | None:
     if not isinstance(item.get("key"), str) or not item["key"]:
         return "item.key must be a non-empty string"
     if kind == "detect":
+        # One item per PAGE (PaperMeister devlog 099 §4): several hint boxes
+        # (the rule's figures on that page), or none for a page-level doubt.
         if not isinstance(item.get("page"), int) or item["page"] < 0:
             return "detect item needs page (0-based int)"
-        hb = item.get("hint_bbox_page_1000")
-        if hb is not None and not _bbox_ok(hb):
-            return "hint_bbox_page_1000 must be [x0,y0,x1,y1] ints 0..1000 or null"
+        hbs = item.get("hint_boxes")
+        if hbs is None and item.get("hint_bbox_page_1000") is not None:
+            hbs = [item["hint_bbox_page_1000"]]  # legacy single-box form
+        if hbs is not None:
+            if not isinstance(hbs, list) or not all(_bbox_ok(b) for b in hbs):
+                return "hint_boxes must be a list of [x0,y0,x1,y1] ints 0..1000"
+            if len(hbs) > 200:
+                return "at most 200 hint boxes per item"
+        fks = item.get("figure_keys")
+        if fks is not None and (not isinstance(fks, list) or not all(isinstance(k, str) for k in fks)):
+            return "figure_keys must be a list of strings"
     elif kind == "link":
         figs = item.get("figures")
         if not isinstance(figs, list) or not figs:

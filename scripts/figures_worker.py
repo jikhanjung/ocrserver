@@ -218,23 +218,34 @@ def sweep_workspaces() -> int:
 
 # ── rendering ─────────────────────────────────────────────────────────────────
 
-def render_target(pdf_path: str, page: int, hint_bbox, out: str) -> dict:
+def hint_boxes_of(req: dict) -> list:
+    """Page-level detect items carry hint_boxes[] (devlog 099 §4); the older
+    single-box form is still accepted. A box covering the whole page (page-
+    doubt placeholder row) is not worth drawing."""
+    boxes = req.get("hint_boxes")
+    if boxes is None:
+        boxes = [req["hint_bbox_page_1000"]] if req.get("hint_bbox_page_1000") else []
+    return [b for b in boxes if not ((b[2] - b[0]) >= 950 and (b[3] - b[1]) >= 950)]
+
+
+def render_target(pdf_path: str, page: int, boxes: list, out: str) -> dict:
     with fitz.open(pdf_path) as doc:
         pg = doc[page]
         pix = pg.get_pixmap(matrix=fitz.Matrix(TARGET_DPI / 72, TARGET_DPI / 72),
                             colorspace=fitz.csRGB, alpha=False)
         im = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-    if hint_bbox:
-        d = ImageDraw.Draw(im)
-        x0, y0, x1, y1 = hint_bbox
-        w, h = im.size
-        d.rectangle([x0 / 1000 * w, y0 / 1000 * h, x1 / 1000 * w, y1 / 1000 * h],
-                    outline=(220, 0, 0), width=4)
     d = ImageDraw.Draw(im)
+    w, h = im.size
+    for i, (x0, y0, x1, y1) in enumerate(boxes):
+        rect = [x0 / 1000 * w, y0 / 1000 * h, x1 / 1000 * w, y1 / 1000 * h]
+        d.rectangle(rect, outline=(220, 0, 0), width=4)
+        if len(boxes) > 1:
+            d.rectangle([rect[0], rect[1], rect[0] + 26, rect[1] + 18], fill=(220, 0, 0))
+            d.text((rect[0] + 4, rect[1] + 3), str(i), fill=(255, 255, 255))
     d.rectangle([0, 0, 170, 28], fill=(255, 255, 255))
     d.text((6, 6), f"page {page} (0-based)", fill=(0, 0, 0))
     im.save(out)
-    return {"width": im.size[0], "height": im.size[1], "dpi": TARGET_DPI}
+    return {"width": im.size[0], "height": im.size[1], "dpi": TARGET_DPI, "hint_boxes_drawn": len(boxes)}
 
 
 def render_crop(pdf_path: str, page: int, bbox, dpi: int, out: str) -> dict:
@@ -424,10 +435,10 @@ def process(item: dict) -> dict:
             if page >= n_pages:
                 return {"status": "failed", "error": f"page {page} out of range ({n_pages} pages)"}
             target = os.path.join(item_dir, "target.png")
-            tinfo = render_target(pdf_path, page, req.get("hint_bbox_page_1000"), target)
+            tinfo = render_target(pdf_path, page, hint_boxes_of(req), target)
             rel = os.path.relpath(target, root)
             payload["target_image"] = {"path": rel, **tinfo,
-                                       "hint_box_drawn": bool(req.get("hint_bbox_page_1000"))}
+                                       "hint_box_index_note": "red boxes are numbered in hint_boxes order" if tinfo["hint_boxes_drawn"] > 1 else ""}
             images = [rel]
         with open(os.path.join(item_dir, "figure.json"), "w") as f:
             json.dump(payload, f, ensure_ascii=False, indent=1)
