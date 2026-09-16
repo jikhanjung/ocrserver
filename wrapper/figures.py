@@ -727,7 +727,8 @@ async def claim(payload: dict, x_worker_token: str | None = Header(None)):
             "request": json.loads(item["request_json"]),
             "prompt": json.loads(item["prompt_json"]),
             "options": json.loads(item["options_json"] or "{}"),
-            "pdf_path": _pdf_path(item["file_hash"]),
+            # no pdf_path: it would be the container's path — the worker resolves
+            # PDF_DIR/{file_hash}.pdf on its own side (2026-09-16 e2e lesson).
         },
         "worker": _worker_public(await _worker_row()),
         "min_interval_s": MIN_INTERVAL,

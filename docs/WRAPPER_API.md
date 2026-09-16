@@ -486,6 +486,36 @@ wrapper 는 접수·큐·결과 저장만 한다. 프롬프트와 결과 JSON �
   "worker": { "state": "sleeping", "alive": true, "paused_reason": null, "next_call_at": 1789…, "min_interval_s": 300 } }
 ```
 
+### 워커가 모델에 주는 입력 (프롬프트 작성자용)
+
+워커(`scripts/figures_worker.py`)는 요청의 `prompt.instructions` 뒤에 `=== INPUT (JSON) ===` 구분선과 JSON 하나를 붙여
+`codex exec` 의 stdin 으로 보낸다. `prompt.schema` 는 `--output-schema` 로 강제된다. JSON 모양:
+
+| kind | 작업 디렉터리(`-C`) | `--image` | INPUT JSON |
+|---|---|---|---|
+| `detect` | 논문 작업 폴더 | `items/<id>/target.png` (대상 쪽 150dpi, 힌트 상자 빨강, 쪽 번호 라벨) | `{kind, item: <요청 항목 그대로>, workspace: {pdf_pages, page_numbering:"0-based", text_dir, all_text, pages_dir, page_dpi}, target_image: {path, width, height, dpi, hint_box_drawn}}` |
+| `link` | 논문 작업 폴더 | 없음 | `{kind, item, workspace: {…}}` |
+| `panels` | 항목 폴더 (`figure.png` 만) | `figure.png` (bbox 크롭, `options.dpi` 기본 216, 긴 변 4000px 상한) | `{kind, item, image: {path, width, height, dpi, pdf_clip_xyxy_points}, image_width, image_height, original_caption, existing_subfigures}` — 뒤 넷은 fsis `astra_panels.py` 프롬프트 호환 |
+
+작업 폴더(`/srv/ocrserver/figure_ws/{file_hash}/{ocr_digest}/`, 논문당 한 번 생성):
+`README.txt` · `text/pNNN.txt`(쪽별 OCR 텍스트, 블록마다 `[Label x0 y0 x1 y1] text`, 그림 블록은 `[image: alt]`) ·
+`text/all.txt`(`=== page N ===` 구분) · `pages/pNNN.png`(100dpi 전 쪽) · `items/<id>/{figure.json, target.png, run/aN/}`.
+detect·link 의 지시문은 "필요하면 앞뒤 쪽을 열고 `text/all.txt` 를 grep 하라" 를 담아야 한다 — 폴더는 `--sandbox read-only`
+로 열려 있고 Codex 는 이미지도 스스로 연다(2026-09-16 실측). 실행 산출물(`prompt.txt`, `schema.json`, `response.json`,
+`events.jsonl`, `stderr.log`, `run.json`)은 `run/a<시도>/` 에 남는다.
+
+### 워커 운영
+
+- 유닛: `scripts/systemd/ocrserver-figures-worker.service` (User=jikhanjung — codex 로그인이 그 홈에 있다). 설치는 파일 머리말.
+- 한 번에 한 항목, 호출 사이 `min_interval_s`(서버가 claim 응답으로 알려줌) 대기. 빈 큐면 30 s 마다 claim.
+- 세션 상한: detect 600 s · link 1200 s · panels 600 s (`FIGURES_SESSION_TIMEOUT_*`). 넘으면 프로세스 그룹 kill →
+  `budget_exhausted`.
+- 치명(`login required`·`Codex CLI not found`·`usage limit`·`rate limit`) 은 호출 전 `codex login status` 와 호출 후
+  stdout+stderr 에서 찾는다. stderr 의 `failed to refresh available models`·`backend-api/ps/mcp` 는 이 망의 상시 노이즈라 제외.
+- 결과 검증: 워커가 `prompt.schema` 로 type/required/properties/items/enum 만 검사(호스트에 jsonschema 없음). 위반이면 `failed`.
+  도메인 검증은 클라이언트 몫.
+- 로그: `journalctl -u ocrserver-figures-worker -f`. 상태는 `/status` 카드와 `GET /api/figures`.
+
 ### 환경변수 (0.3.0 추가)
 
 | 변수 | 기본값 | 설명 |

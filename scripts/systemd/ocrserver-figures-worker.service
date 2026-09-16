@@ -1,0 +1,40 @@
+# /etc/systemd/system/ocrserver-figures-worker.service
+#
+# Host-side executor for the wrapper's figure-split jobs (wrapper 0.3.0+, devlog 046/047).
+# Runs as jikhanjung because the Codex CLI login (~/.codex) lives there; the PDF
+# store is root-owned but world-readable, and the workspace dir is ours.
+#
+# Install (needs sudo):
+#   sudo cp /home/jikhanjung/projects/ocrserver/scripts/systemd/ocrserver-figures-worker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now ocrserver-figures-worker.service
+#   journalctl -u ocrserver-figures-worker -f
+#
+# The script itself is read from the live tree (/srv/ocrserver/scripts/), copied
+# there from the dev tree like metrics_collector.py. Keep it on the same git tag
+# as the wrapper image (P16 §1.3 "old checkout" incident).
+
+[Unit]
+Description=ocrserver figures worker (Codex CLI / gpt-6-astra)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jikhanjung
+Group=jikhanjung
+EnvironmentFile=/srv/ocrserver/.env
+Environment=WRAPPER_URL=http://127.0.0.1:8080
+Environment=PDF_DIR=/srv/ocrserver/data/pdfs
+Environment=FIGURES_WS_DIR=/srv/ocrserver/figure_ws
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /srv/ocrserver/scripts/figures_worker.py
+Restart=always
+RestartSec=30
+Nice=10
+# codex is a child process group; give it time to be killed on stop
+TimeoutStopSec=90
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

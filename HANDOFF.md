@@ -1,4 +1,4 @@
-# HANDOFF — 2026-09-16 (wrapper 0.3.0: 도판 분할 잡 API 뼈대 배포, devlog 046)
+# HANDOFF — 2026-09-16 (도판 분할: wrapper 0.3.1 + 호스트 워커 e2e 통과, devlog 046·047 — 유닛 설치는 sudo 대기)
 
 > **🟢 이 박스가 현재 상태의 전부다.**
 > - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 09-08
@@ -32,11 +32,12 @@
 >   (「곧 해야 할 작업」).
 > - ⚠️ **배포 규칙** (유지): wrapper/llmwrapper 재생성은 `up -d --no-deps`.
 >   `nginx.conf` 를 **에디터/`mv` 로 교체하지 말 것** (inode 고정). `cp` OK.
-> - **wrapper 0.3.0 (09-16 07:43 UTC 배포, devlog 046)**: `/pdfs`, `/figures/*`, `/api/figures`, `/internal/figures/*`
->   + 테이블 5개. **워커는 아직 없다** — 잡을 받아 큐에 두기만 한다. `.env` 에 `FIGURES_WORKER_TOKEN`(생성됨),
->   `FIGURES_MIN_INTERVAL=300`. nginx 두 설정에 `/pdfs`·`/figures`·`/internal/`(loopback+172.18/16 만) 추가, reload 됨.
->   OCR 경로 무변 (회귀 15/15 확인). 스모크 56 checks.
-> - 이미지: `ocrwrapper:0.3.0`, `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
+> - **도판 분할 (devlog 046·047)**: wrapper **0.3.1** (08:31 UTC) — `/pdfs`, `/figures/*`, `/api/figures`, `/internal/figures/*`.
+>   호스트 워커 `scripts/figures_worker.py` 는 **e2e 통과**(panels 70 s · detect 95 s, Astra 가 힌트 상자를 chandra 값 3‰ 안으로
+>   보정) 했지만 **systemd 유닛은 아직 설치 안 됨 — sudo 4줄, devlog 047 §설치**. 설치 전엔 `/figures/*` 잡이 큐에만 쌓인다.
+>   `.env`: `FIGURES_WORKER_TOKEN`, `FIGURES_MIN_INTERVAL=300`. nginx `/internal/` 은 loopback+172.18/16 만.
+>   OCR 경로 무변 (회귀 15/15). 스모크 56 checks. e2e 산출물은 `/srv/ocrserver/figure_ws/510ea212…/`(3.6MB, 7일 TTL).
+> - 이미지: `ocrwrapper:0.3.1`, `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
 
 > **(이전 박스, 2026-09-08 — nginx upstream resolve, devlog 043)**
 > - chandra-b 정지 후 wrapper 재생성 → wrapper 가 chandra-b 의 옛 IP
@@ -79,7 +80,15 @@
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-09-16 저녁 — wrapper 0.3.0 도판 잡 API 뼈대, devlog 046)
+## 방금 한 작업 (2026-09-16 밤 — 호스트 워커 + wrapper 0.3.1, devlog 047)
+
+- `scripts/figures_worker.py` + `scripts/systemd/ocrserver-figures-worker.service`. claim → 작업 폴더/렌더 → `codex exec` →
+  result. 치명/예산/실패 판정, heartbeat, 5분 간격, 폴더 TTL. 자세히 devlog 047 표.
+- e2e: 라이브 wrapper 에 workspace 업로드 + panels(fsis 프롬프트 그대로) + detect(임시 프롬프트) → 둘 다 done.
+  잡은 버그 둘: 서버 `pdf_path` 가 컨테이너 경로(→ 0.3.1 에서 제거, 워커는 자기 PDF_DIR) · `page_text` 가 img-alt 만 있는 Figure 블록을 버림.
+- **설치 대기**: `/srv/ocrserver/scripts` 가 root 소유라 워커 복사·유닛 등록 모두 sudo (devlog 047 §설치).
+
+## 이전 작업 (2026-09-16 저녁 — wrapper 0.3.0 도판 잡 API 뼈대, devlog 046)
 
 - `wrapper/figures.py` 신규(라우터) + `main.py` 3줄. 계약은 devlog 046 표. 프롬프트는 요청에 실려 오고 서버는 구조만 검증.
 - 워커 전용 내부 API(claim/heartbeat/result/worker-status/workspace) — 토큰 + nginx allow-list.
@@ -854,9 +863,9 @@ llm          vllm/vllm-openai:latest       Exited
 
 **2026-09-16 추가:**
 
-- **도판 분할 서버 2단계 — 호스트 워커** `scripts/figures_worker.py` + systemd (devlog 046 §다음). 1단계(API 뼈대)는
-  0.3.0 으로 배포됨. 워커가 붙기 전까지 `/figures/*` 잡은 큐에만 쌓인다. 프롬프트 3벌은 PaperMeister G 단계에서 오지만
-  panels 는 `scripts/subfigure/astra_panels.py` 프롬프트로 먼저 돌려 볼 수 있다.
+- **워커 유닛 설치 (sudo, 사용자)** — devlog 047 §설치 4줄. 그 뒤 `/status` 카드가 "대기 (idle)", `journalctl -u ocrserver-figures-worker -f`.
+- **워커 재시작 규칙**: 항목 처리 중(`running`) 에 `systemctl restart` 하면 그 항목은 heartbeat 1800 s 뒤에야 재큐. `sleeping`/`idle` 일 때 할 것.
+- 도판 분할 다음은 PaperMeister G 단계(명세 v2 + 프롬프트 3벌) 대기. 서버·워커는 준비 끝.
 
 **2026-09-14 추가:**
 

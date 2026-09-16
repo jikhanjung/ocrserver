@@ -114,7 +114,7 @@ with TestClient(main.app) as c:
     ok(r.status_code == 200 and r.json()["item"]["client_id"] == "pm-a", f"claim 1 {r.text}")
     it = r.json()["item"]
     ok(it["kind"] == "panels" and it["attempt"] == 1 and it["prompt"]["version"] == "test-v1"
-       and it["pdf_path"].endswith(f"{h}.pdf") and it["request"]["page"] == 0, "claim payload")
+       and "pdf_path" not in it and it["request"]["page"] == 0, "claim payload")
     ok(c.get(f"/figures/panels/{j1}").json()["status"] == "processing", "job processing after claim")
     ok(c.post(f"/internal/figures/items/{it['item_id']}/heartbeat", headers=W).status_code == 200, "heartbeat")
 
