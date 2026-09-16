@@ -63,6 +63,15 @@ journalctl -u ocrserver-figures-worker -f      # "figures_worker 0.3.0 id=jikhan
   attempt=1 로 다시 집었다. → **재시작 시점을 가릴 필요가 없어졌다.** 스모크 60 checks.
 - 0.3.2 (같은 날): detect 항목 쪽 단위 `hint_boxes[]` (PaperMeister 099 §4).
 
+## 추가 — PaperMeister G 수령과 계약 테스트 (같은 날 밤)
+
+PaperMeister `a77bd64` 가 `docs/figure_server_spec_v2.md` + `papermeister/figure_prompts/{detect,link,panels}.{md,schema.json}` 을
+넘겼다(wrapper 0.3.2 전송 형식에 맞춰 씀). `wrapper/tests/contract_spec_v2.py` 가 그 **실제 파일**(복사하지 않고 `PM_PROMPTS_DIR`
+로 마운트)로 명세 §4–§6 의 요청을 그대로 만들어 제출·claim 하고, 명세의 예시 응답 3종이 워커의 스키마 검사를 통과하는지,
+프롬프트를 고치면 `version` 이 바뀌어 dedup 이 풀리는지 본다. **27 checks passed.** 서버·워커 변경 없음 — 맞았다.
+실행: `docker run --rm -e FIGURES_WORKER_TOKEN=t -e PM_PROMPTS_DIR=/pm_prompts -v $PWD/wrapper:/app -v $PWD/scripts:/worker_scripts:ro
+-v <prompts>:/pm_prompts:ro -w /app honestjung/ocrwrapper:0.3.3 sh -c 'pip install -q requests pillow; python -m tests.contract_spec_v2'`
+
 ## 남은 것
 
 - detect·link 의 **실제 프롬프트**는 PaperMeister G 단계에서 온다. 여기서 쓴 detect 프롬프트는 e2e 용이며 저장소에 두지 않았다.

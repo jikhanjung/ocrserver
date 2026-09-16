@@ -871,6 +871,7 @@ llm          vllm/vllm-openai:latest       Exited
   `page`+`hint_boxes`+`figure_keys` 옆에 모델용 `figures[]`·`reasons`·`hints`) + `papermeister/figure_prompts/`(detect·link·panels `.md`+`.schema.json`, 요청에 실려 오므로 복사 불필요;
   스키마는 required 전부·additionalProperties false) + `scripts/link_figures.py --dump`·`split_panels.py --dump`의 실제 요청 JSON(테스트 픽스처 후보).
   **다음은 PaperMeister H**(HTTP 클라이언트·레인의 제출/폴링/반영·detect 반영) — 서버 쪽은 첫 실제 호출을 함께 지켜보는 것.
+  ✅ 서버 쪽 대조 (같은 밤): `wrapper/tests/contract_spec_v2.py` 가 그 프롬프트·스키마 실물로 명세 §4–§6 요청·응답을 통과 (27 checks). 서버·워커 변경 불필요.
 
 **2026-09-14 추가:**
 
