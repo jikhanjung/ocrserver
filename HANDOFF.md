@@ -843,8 +843,9 @@ llm          vllm/vllm-openai:latest       Exited
 
 **2026-09-16 추가:**
 
-- **도판 분할 서버(P02)** — PaperMeister 가 명세 v2·프롬프트를 넘기면 시작. 1 단계 첫 확인: Codex 에이전트가 세션 중
-  작업 폴더의 PNG 를 스스로 열 수 있는지 (`view_image` 류). 안 되면 P02 §3.3 의 절충안.
+- **도판 분할 서버(P02)** — PaperMeister 가 명세 v2·프롬프트를 넘기면 시작. ✅ Codex 가 작업 폴더의 PNG 를 스스로 여는 것
+  확인(09-16 06:27, P02 §3.3 — bbox 가 chandra 와 5‰ 안에서 일치). 작업 폴더 텍스트는 서버 DB 가 아니라 클라이언트가
+  `POST /figures/workspace` 로 올린다(PaperMeister 대조 지적, P02 §3.3).
 
 **2026-09-14 추가:**
 

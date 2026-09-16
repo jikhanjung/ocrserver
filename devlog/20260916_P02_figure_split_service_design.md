@@ -68,6 +68,8 @@ PaperMeister ──HTTP──▶ wrapper (컨테이너)               잡 접수
 ```
 HEAD /pdfs/{file_hash}            200 | 404
 POST /pdfs                        multipart file (+client_id) → {file_hash}
+POST /figures/workspace           {file_hash, ocr_digest, pages:[{page, markdown}]} → 201   작업 폴더 텍스트 (§3.3)  ← 추가
+HEAD /figures/workspace/{file_hash}/{ocr_digest}   200 | 404
 
 POST /figures/detect              → {job_id}        ①′ 재판정 (도판 단위, Astra + 쪽 이미지)     ← 추가
 POST /figures/link                → {job_id}        ② 연결·분할 (논문 단위, Astra 텍스트)
@@ -103,22 +105,34 @@ P16 §6.3·§6.4 + P17 §3.1 명세 v2 그대로. 달라지는 것은 `options.m
 **작업 폴더** `/data/figure_ws/{file_hash}/` (한 번 만들면 TTL 7일 캐시, 같은 논문의 여러 item 이 공유):
 ```
 README.txt          쪽 수 · 파일 규칙 · "쪽 번호는 0-based" 한 줄
-text/p013.txt       쪽별 OCR 텍스트 — wrapper DB `pages.markdown` 에서 HTML 태그를 벗긴 것 (클라이언트가 보낼 필요 없음)
+text/p013.txt       쪽별 OCR 텍스트 — **클라이언트가 올린 것**(`POST /figures/workspace`)에서 HTML 태그를 벗긴 것
 text/all.txt        전체 텍스트, 쪽 경계 마커 `=== page 13 ===` — grep 용
 pages/p013.png      쪽 전체 100dpi 렌더 (PyMuPDF, `_mupdf_lock`, 워커 직렬)
 item/figure.json    이 item 의 힌트(상자·이름·캡션 블록·플레이트 쪽) + reasons
 item/target.png     대상 쪽 150dpi + 힌트 상자 빨강 (이건 `--image` 로도 붙인다)
 ```
-- 렌더는 **미리 전부**(300쪽 ≈ 90 s, 100dpi ≈ 0.4MB/쪽) 한다. 세션 중 렌더 요청을 받으려면 `--sandbox workspace-write` 와
+- **텍스트는 서버 DB 에서 가져오지 않는다** (PaperMeister 클라이언트 계획 §10.1, 2026-09-16 저녁 대조): RunPod 시절 논문은 서버에
+  잡이 없고, 9/8 조각 사고의 `done_with_errors` 잡은 서버에 그대로 남아 있으며, `jobs` 는 (hash, client_id) 별 여러 건이라 "최신"이
+  조각일 수 있다. 클라이언트 캐시(`ocr_json/*.json`)가 원천이므로 논문당 한 번 `POST /figures/workspace` 로 `pages[].markdown` 을
+  올린다(300쪽 ≈ 1–2MB). 폴더 키는 **`file_hash|ocr_digest`**(캐시 JSON 내용 해시). detect·link 요청은 `ocr_digest` 를 싣고,
+  같은 키의 폴더가 없으면 `workspace_missing` 으로 거절한다. `ocr_digest` 는 detect·link 의 dedup 키에도 들어간다.
+  폴더 경로는 `/data/figure_ws/{file_hash}/{ocr_digest}/`.
+- 렌더는 **미리 전부**(300쪽 ≈ 90 s, 100dpi ≈ 0.4MB/쪽) 한다 — 이건 서버 보관 PDF 에서, `POST /figures/workspace` 를 받을 때. 세션 중 렌더 요청을 받으려면 `--sandbox workspace-write` 와
   헬퍼 스크립트가 필요한데, 읽기 전용 샌드박스가 더 안전하고 단순하다. 폴더는 논문당 한 번이라 detect 여러 건·link 가 나눠 쓴다.
 - 호출: `codex exec -C /data/figure_ws/{hash} --sandbox read-only --model gpt-6-astra -i item/target.png --output-schema … -`.
   fsis `astra_cli_bbox.py` 의 "Do not read other files" 지시는 **detect/link 에서는 반대로** 뒤집는다. panels 는 그대로(도판 한 장만).
-- **확인할 것(1 단계)**: Codex 에이전트가 세션 중 폴더의 PNG 를 스스로 열어 볼 수 있는지(`view_image` 류 도구). 안 되면
-  detect 는 `-i` 로 대상 쪽 ±2 를 미리 붙이고 텍스트만 폴더에서 훑는 절충으로.
+- **확인됨(2026-09-16 06:27 UTC)**: Codex 에이전트는 세션 중 폴더의 PNG 를 **스스로 연다**. `kruskal1964.pdf` 4쪽을
+  `pages/pNNN.png`(100dpi) + `text/pNNN.txt` 로 두고 `-i` 없이 "FIGURE 1 이 있는 쪽을 찾아 이미지를 보고 묘사·bbox" 를 시켰더니
+  `rg` 3회로 쪽을 찾고 `view_image` 로 `p003.png` 를 열어 "축 라벨 없는 물결 곡선, 우상단 상승" + bbox `[336,590,667,758]`.
+  같은 도판의 chandra `data-bbox` 는 `335 588 662 756` — **5‰ 안에서 일치**(두 좌표계가 같다는 확인도 됨). 소요 ≈ 90 s,
+  입력 58k 토큰(캐시 41k), 출력 332. `--json` 이벤트 스트림에는 `view_image` 호출이 item 으로 **안 찍힌다**(bash 만 찍힘) —
+  워커의 `pages_consulted` 는 이벤트가 아니라 **결과 JSON 의 필드**로 받아야 한다(클라이언트 계획 §10.3 과 일치).
+  stderr 에 `failed to refresh available models` · `chatgpt.com/backend-api/ps/mcp` 전송 오류가 매번 찍히는데(KOPRI 망 MITM 추정)
+  실행에는 영향 없음 — 워커의 치명 오류 판정에서 **제외**할 것.
 - **비용 상한**: 세션 타임아웃(detect 10분 · link 20분 초기값, `run_command` 의 프로세스 그룹 kill) + 지시문에 "먼저 텍스트를
   grep 해 후보 쪽을 고르고, 이미지는 후보만 열어라" — 300쪽을 전부 보게 두지 않는다. 상한에 걸리면 item `budget_exhausted`
   (실패·시도 소진과 구분). 결과의 `pages_consulted` 와 CLI usage 를 `figure_calls` 에 기록해 실제 비용을 본다.
-- dedup 키 = `file_hash|page|hint_bbox|prompt digest` (입력의 정체만. 어디를 봤는지는 키가 아니다).
+- dedup 키 = `file_hash|ocr_digest|page|hint_bbox|prompt digest` (입력의 정체만. 어디를 봤는지는 키가 아니다).
 - 소요·한도는 **미실측**. 첫 배포에서 잰다 — 에이전트 세션이라 panels 보다 편차가 클 것.
 
 ## 4. 내부
@@ -138,6 +152,8 @@ item/target.png     대상 쪽 150dpi + 힌트 상자 빨강 (이건 `--image` �
 - **TTL**: 결과 30일(P16 §6.5). 진실의 원천은 클라이언트 DB.
 - **속도 현실**: detect·link 는 에이전트 세션이라 미실측(상한 10/20분) · panels 도판당 90–130 s(fsis 초기)→15–30 s(운영). 전부 직렬.
 - **작업 폴더 디스크**: 논문당 100dpi 전 쪽 ≈ 300쪽 120MB. TTL 7일, `/data` 는 루트 LV(82GB 여유) — 상한 20GB 넘으면 오래된 것부터.
+- **처리량(D8, 5분 1건 ≈ 288/일)**: 파일럿 100편 게이트만 ≈ 1,200건 ≈ 4일 (클라이언트 계획 §10.2). 게이트 표본은 ② 30편·③ 도판 100 으로
+  자른다. detect·link 세션이 5분을 넘으면 간격이 아니라 세션 시간이 처리량을 정한다.
 
 ---
 
@@ -158,7 +174,7 @@ item/target.png     대상 쪽 150dpi + 힌트 상자 빨강 (이건 `--image` �
 | 0 | **클라이언트 G 단계 대기** — 명세 v2 + 프롬프트 3벌 + detect 요청 모양이 넘어와야 시작 | — |
 | 1 | wrapper 0.3.0: `/pdfs`, `figure_jobs`·`figure_items`, `/figures/*` 접수·조회·resume, 내부 claim/result/heartbeat, dedup, 공평 분배, `/status` 카드 | 2일 |
 | 2 | `scripts/figures_worker.py` + systemd: claim 루프, **작업 폴더 빌더**(DB 텍스트 + 전 쪽 렌더 + 힌트 상자), `codex exec -C` 래퍼(`astra_cli_bbox.run_command` 재사용), 스키마 검증, 세션 상한, 치명 정지, 사용량 기록, 일일 상한 | 2–3일 |
-| 3 | 검증: fsis 파일럿 도판 5장 panels → fsis Astra 결과와 패널 수·bbox 비교(같은 모델·프롬프트라 일치해야) · detect 는 devlog 261 "본문이 도판" 14건 + P38 플레이트 설명 사례 · link 1편 시간·`pages_consulted`·usage 측정 · **Codex 가 폴더 이미지를 열 수 있는지 먼저** | 1일 |
+| 3 | 검증: fsis 파일럿 도판 5장 panels → fsis Astra 결과와 패널 수·bbox 비교(같은 모델·프롬프트라 일치해야) · detect 는 devlog 261 "본문이 도판" 14건 + P38 플레이트 설명 사례 · link 1편 시간·`pages_consulted`·usage 측정 (폴더 이미지 열기는 ✅ 확인됨, §3.3) | 1일 |
 | 4 | 운영: 로그인 만료 알림, `FIGURES_MIN_INTERVAL` 조정, HANDOFF·WRAPPER_API 문서 | 반나절 |
 
 ---
