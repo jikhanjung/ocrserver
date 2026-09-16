@@ -1,4 +1,4 @@
-# HANDOFF — 2026-09-14 (GPU 1 예산제: OCR×1 + LLM 0.60, devlog 045)
+# HANDOFF — 2026-09-16 (도판 분할 서버 설계 P02 확정 · 라이브는 09-14 상태 그대로)
 
 > **🟢 이 박스가 현재 상태의 전부다.**
 > - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 09-08
@@ -75,7 +75,18 @@
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-09-14 — GPU 1 예산제 + LLM 모드 전환, devlog 045)
+## 방금 한 작업 (2026-09-16 — 도판 분할 서비스 설계, P02 · 코드 변경 없음)
+
+- **P02** `devlog/20260916_P02_figure_split_service_design.md` — PaperMeister P16 §6 을 서버 명세의 원본으로 두고
+  ocrserver 쪽 구현을 정리. 짝 문서 PaperMeister `docs/figure_pipeline_client_plan.md` (커밋 e066205).
+- 사용자 결정 8건 기록(P02 §0): ①조립은 클라이언트 · ②③ 전부 Astra(codex, Opus 없음) · 의심 도판은 `/figures/detect`
+  로 재판정하되 **Astra 가 논문 작업 폴더에서 앞뒤 쪽·전체 텍스트를 스스로 본다** · 프롬프트는 요청에 실려 옴 ·
+  `panel_key` 에 entries 없음 · 호출 5분에 1건(`FIGURES_MIN_INTERVAL=300`).
+- 구조: wrapper(컨테이너, DB writer) + **호스트 워커**(systemd, codex 실행, 내부 API 로 claim/result).
+- 서버 착수 조건: PaperMeister 쪽 준비 A~G(P17 §4) 가 끝나 명세 v2 + 프롬프트 3벌이 넘어올 때. **그 전엔 서버 작업 없음.**
+- 라이브 상태 변화 없음 (`llm+ocr` 유지).
+
+## 이전 작업 (2026-09-14 — GPU 1 예산제 + LLM 모드 전환, devlog 045)
 
 - 결정: GPU 0 = OCR 전용, **GPU 1 = llm(상주, 0.60) + 배치 작업 공용**.
   MIG 불가(Turing), 컨테이너 스왑·MPS 는 안 함.
@@ -829,6 +840,11 @@ llm          vllm/vllm-openai:latest       Exited
   3DGS) 는 `done_with_errors` 로 reconcile 됨. 사용자가 재업로드 필요.
 
 ## 곧 해야 할 작업
+
+**2026-09-16 추가:**
+
+- **도판 분할 서버(P02)** — PaperMeister 가 명세 v2·프롬프트를 넘기면 시작. 1 단계 첫 확인: Codex 에이전트가 세션 중
+  작업 폴더의 PNG 를 스스로 열 수 있는지 (`view_image` 류). 안 되면 P02 §3.3 의 절충안.
 
 **2026-09-14 추가:**
 
