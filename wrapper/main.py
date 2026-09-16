@@ -12,6 +12,7 @@ import aiosqlite
 import fitz
 import httpx
 import yaml
+import figures
 from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -452,6 +453,15 @@ async def lifespan(app: FastAPI):
     _db = await aiosqlite.connect(DB_PATH)
     _db.row_factory = aiosqlite.Row
     await db_init()
+    # Figure-split job tables + old-result cleanup (wrapper 0.3.0, P02).
+    figures.configure(lambda: _db, PDF_DIR)
+    await figures.db_init(_db)
+    try:
+        swept = await figures.cleanup(_db)
+        if swept["jobs"] or swept["workspaces"]:
+            print(f"[figures] cleanup: {swept}", flush=True)
+    except Exception as e:
+        print(f"[figures] cleanup failed: {e}", flush=True)
     await _resume_processing_jobs()
     # Best-effort RO open of llmserver.db. Missing file just means the llm
     # wrapper hasn't run yet — /api/llm/* will report empty stats.
@@ -482,6 +492,11 @@ async def _no_store_api(request, call_next):
         response.headers["Cache-Control"] = "no-store"
     return response
 
+
+if WRAPPER_ROLE == "ocr":
+    # /pdfs, /figures/*, /api/figures, /internal/figures/* — figure-split jobs
+    # executed by the host worker (scripts/figures_worker.py). See figures.py.
+    app.include_router(figures.router)
 
 app.mount(
     "/static",

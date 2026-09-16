@@ -1,4 +1,4 @@
-# HANDOFF — 2026-09-16 (도판 분할 서버 설계 P02 확정 · 라이브는 09-14 상태 그대로)
+# HANDOFF — 2026-09-16 (wrapper 0.3.0: 도판 분할 잡 API 뼈대 배포, devlog 046)
 
 > **🟢 이 박스가 현재 상태의 전부다.**
 > - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 09-08
@@ -32,7 +32,11 @@
 >   (「곧 해야 할 작업」).
 > - ⚠️ **배포 규칙** (유지): wrapper/llmwrapper 재생성은 `up -d --no-deps`.
 >   `nginx.conf` 를 **에디터/`mv` 로 교체하지 말 것** (inode 고정). `cp` OK.
-> - 이미지: `ocrwrapper:0.2.7`, `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
+> - **wrapper 0.3.0 (09-16 07:43 UTC 배포, devlog 046)**: `/pdfs`, `/figures/*`, `/api/figures`, `/internal/figures/*`
+>   + 테이블 5개. **워커는 아직 없다** — 잡을 받아 큐에 두기만 한다. `.env` 에 `FIGURES_WORKER_TOKEN`(생성됨),
+>   `FIGURES_MIN_INTERVAL=300`. nginx 두 설정에 `/pdfs`·`/figures`·`/internal/`(loopback+172.18/16 만) 추가, reload 됨.
+>   OCR 경로 무변 (회귀 15/15 확인). 스모크 56 checks.
+> - 이미지: `ocrwrapper:0.3.0`, `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
 
 > **(이전 박스, 2026-09-08 — nginx upstream resolve, devlog 043)**
 > - chandra-b 정지 후 wrapper 재생성 → wrapper 가 chandra-b 의 옛 IP
@@ -75,7 +79,14 @@
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-09-16 — 도판 분할 서비스 설계, P02 · 코드 변경 없음)
+## 방금 한 작업 (2026-09-16 저녁 — wrapper 0.3.0 도판 잡 API 뼈대, devlog 046)
+
+- `wrapper/figures.py` 신규(라우터) + `main.py` 3줄. 계약은 devlog 046 표. 프롬프트는 요청에 실려 오고 서버는 구조만 검증.
+- 워커 전용 내부 API(claim/heartbeat/result/worker-status/workspace) — 토큰 + nginx allow-list.
+- 스모크 `wrapper/tests/smoke_figures.py` 56 checks. 배포·검증 완료. Codex 가 작업 폴더 PNG 를 스스로 여는 것도 실측 확인(P02 §3.3).
+- 다음: **2단계 호스트 워커** `scripts/figures_worker.py` (devlog 046 §다음).
+
+## 이전 작업 (2026-09-16 — 도판 분할 서비스 설계, P02 · 코드 변경 없음)
 
 - **P02** `devlog/20260916_P02_figure_split_service_design.md` — PaperMeister P16 §6 을 서버 명세의 원본으로 두고
   ocrserver 쪽 구현을 정리. 짝 문서 PaperMeister `docs/figure_pipeline_client_plan.md` (커밋 e066205).
@@ -843,9 +854,9 @@ llm          vllm/vllm-openai:latest       Exited
 
 **2026-09-16 추가:**
 
-- **도판 분할 서버(P02)** — PaperMeister 가 명세 v2·프롬프트를 넘기면 시작. ✅ Codex 가 작업 폴더의 PNG 를 스스로 여는 것
-  확인(09-16 06:27, P02 §3.3 — bbox 가 chandra 와 5‰ 안에서 일치). 작업 폴더 텍스트는 서버 DB 가 아니라 클라이언트가
-  `POST /figures/workspace` 로 올린다(PaperMeister 대조 지적, P02 §3.3).
+- **도판 분할 서버 2단계 — 호스트 워커** `scripts/figures_worker.py` + systemd (devlog 046 §다음). 1단계(API 뼈대)는
+  0.3.0 으로 배포됨. 워커가 붙기 전까지 `/figures/*` 잡은 큐에만 쌓인다. 프롬프트 3벌은 PaperMeister G 단계에서 오지만
+  panels 는 `scripts/subfigure/astra_panels.py` 프롬프트로 먼저 돌려 볼 수 있다.
 
 **2026-09-14 추가:**
 

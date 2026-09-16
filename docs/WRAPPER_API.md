@@ -428,6 +428,74 @@ for page in job["pages"]:
 
 ---
 
+## 도판 분할 잡 API (wrapper 0.3.0+, P02)
+
+OCR 과 별개의 잡 종류. 실행은 **호스트 워커**(`scripts/figures_worker.py`, Codex CLI / gpt-6-astra)가 하고
+wrapper 는 접수·큐·결과 저장만 한다. 프롬프트와 결과 JSON 스키마는 **요청에 실려 온다** — 서버는 도메인을
+모르고 구조만 검증한다. 쪽 번호는 모두 **0-based**. 설계: `devlog/20260916_P02_figure_split_service_design.md`,
+클라이언트 계약: PaperMeister `docs/figure_pipeline_client_plan.md`.
+
+| 메서드 | 경로 | 역할 |
+|---|---|---|
+| `HEAD/GET` | `/pdfs/{file_hash}` | 서버에 PDF 가 있는가 (200 / 404) |
+| `POST` | `/pdfs` | multipart `file` (+`client_id`) → `{file_hash, existed, size}`. OCR 없이 보관만. 201 |
+| `POST` | `/figures/workspace` | `{client_id, file_hash, ocr_digest, pages:[{page, markdown}]}` — 논문 쪽별 OCR 텍스트. PDF 가 없으면 404 `pdf_missing`. 201 |
+| `HEAD/GET` | `/figures/workspace/{file_hash}/{ocr_digest}` | 작업 폴더 텍스트가 있는가 |
+| `POST` | `/figures/{kind}` | `kind` ∈ `detect` \| `link` \| `panels`. 202 `{job_id, total, cached, queued}` |
+| `GET` | `/figures/{kind}/{job_id}` | 잡 + 항목별 결과 |
+| `GET` | `/figures/jobs?client_id=&kind=&status=` | 목록 (결과 본문 없음) |
+| `POST` | `/figures/{kind}/{job_id}/resume?retry_errors=` | 실패·예산 소진 항목 재큐. `retry_errors=true` 면 시도 횟수 초기화 |
+| `POST` | `/figures/worker/resume` | 치명 정지(로그인 만료·한도) 해제. 호스트에서 원인을 고친 뒤 호출 |
+| `GET` | `/api/figures` | 대시보드 요약 (워커 상태·큐·24h 호출·마지막 오류) |
+| `POST` | `/internal/figures/*` | 워커 전용. `X-Worker-Token` + nginx 에서 loopback·docker 브리지만 허용 |
+
+### POST /figures/{kind}
+
+```json
+{ "client_id": "papermeister-…",
+  "file_hash": "<sha256>",
+  "ocr_digest": "<캐시 JSON 해시>",          // detect·link 필수 (작업 폴더 키). panels 는 선택
+  "items": [ { "key": "f12@…", … } ],       // kind 별 필드는 아래. key 는 응답에 그대로 돌아온다
+  "prompt": { "version": "detect-v1-…", "instructions": "…", "schema": { … } },
+  "options": { "model": "gpt-6-astra", "effort": "high", "dpi": 216 },
+  "force": false }
+```
+
+| kind | item 필수 필드 | 선행 조건 |
+|---|---|---|
+| `detect` | `page`, `hint_bbox_page_1000` (4 ints 0..1000 또는 null) | PDF + 작업 폴더 |
+| `link` | `figures: [{figure_id, page, bbox_page_1000, …}]` | PDF + 작업 폴더 |
+| `panels` | `page`, `bbox_page_1000`, `caption`, `entries` | PDF |
+
+- **dedup**: `(kind, file_hash, ocr_digest, item 내용, prompt, options)` 해시가 같은 항목이 같은 `client_id` 로
+  `done` 이면 재호출 없이 그 결과를 복사한다(`cached`). `force: true` 로 우회.
+- 항목 상태: `queued` → `processing` → `done` | `failed`(시도 3회 소진) | `budget_exhausted`(세션 상한).
+  잡 상태: `queued` | `processing` | `done` | `done_with_errors` | `failed`.
+- 워커의 치명 오류(로그인 만료·CLI 없음·사용량 한도)는 **시도로 세지 않고** 항목을 큐로 되돌리며 워커를
+  `paused` 로 둔다. `GET` 응답의 `worker.state`·`paused_reason` 으로 보인다. 해제는 `/figures/worker/resume`.
+- 호출 간격 `FIGURES_MIN_INTERVAL`(기본 300 s) 은 워커가 지키고 서버는 알려만 준다.
+- 결과 TTL 30일, 작업 폴더 TTL 7일 (기동 시 정리). 진실의 원천은 클라이언트 DB.
+
+### GET /figures/{kind}/{job_id}
+
+```json
+{ "job_id": "…", "kind": "panels", "status": "processing", "total": 12, "done": 5, "failed": 0, "cached": 3,
+  "items": [ { "key": "f12@…", "status": "done", "attempts": 1, "result": { … 클라이언트 스키마 그대로 … },
+               "elapsed_s": 97.3, "usage": { … }, "model": "gpt-6-astra", "completed_at": 1789… },
+             { "key": "f13@…", "status": "queued", "attempts": 0 } ],
+  "worker": { "state": "sleeping", "alive": true, "paused_reason": null, "next_call_at": 1789…, "min_interval_s": 300 } }
+```
+
+### 환경변수 (0.3.0 추가)
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `FIGURES_WORKER_TOKEN` | (없음) | 비어 있으면 `/internal/figures/*` 가 503 — 워커가 붙을 수 없다 |
+| `FIGURES_MIN_INTERVAL` | `300` | 워커 호출 최소 간격(초). 서버는 claim 응답으로 알려준다 |
+| `FIGURES_MAX_ATTEMPTS` | `3` | 항목당 시도 |
+| `FIGURES_HEARTBEAT_TIMEOUT` | `1800` | 이 시간 동안 heartbeat 없는 `processing` 항목은 큐로 복귀 |
+| `FIGURES_RESULT_TTL_DAYS` / `FIGURES_WORKSPACE_TTL_DAYS` | `30` / `7` | 기동 시 정리 |
+
 ## 환경변수 (wrapper 컨테이너)
 
 | 변수 | 기본값 | 설명 |

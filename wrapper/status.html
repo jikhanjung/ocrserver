@@ -191,6 +191,39 @@
     </div>
   </div>
 
+  <!-- Figure-split worker (wrapper 0.3.0, P02) -->
+  <div class="card mb-4" id="figCard">
+    <div class="card-body p-4">
+      <div class="d-flex justify-content-between align-items-start mb-3">
+        <div>
+          <h5 class="mb-0 fw-semibold">도판 분할 <span class="text-muted fs-6 fw-normal">Astra / Codex CLI · 호스트 워커</span></h5>
+          <div class="info-note mt-1" id="figHint">—</div>
+        </div>
+        <span id="figWorker" class="badge fs-6 px-3 py-2 bg-secondary">확인 중...</span>
+      </div>
+      <div class="row g-3">
+        <div class="col-6 col-md-3">
+          <div class="metric-label">대기 / 처리 중</div>
+          <div class="metric-value fs-5"><span id="figQueued">—</span> <span class="text-muted fs-6 fw-normal">/ <span id="figProcessing">—</span></span></div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="metric-label">완료 / 실패</div>
+          <div class="metric-value fs-5"><span id="figDone">—</span> <span class="text-muted fs-6 fw-normal">/ <span id="figFailed">—</span></span></div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="metric-label">호출 24h <span class="text-muted fw-normal">(평균 초)</span></div>
+          <div class="metric-value fs-5"><span id="figCalls">—</span> <span class="text-muted fs-6 fw-normal" id="figCallsAvg"></span></div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="metric-label">간격 / 작업 폴더</div>
+          <div class="metric-value fs-5"><span id="figInterval">—</span> <span class="text-muted fs-6 fw-normal">/ <span id="figWs">—</span></span></div>
+        </div>
+      </div>
+      <div class="small text-muted mt-2" id="figByKind"></div>
+      <div class="small text-danger mt-1" id="figLastError" style="display:none"></div>
+    </div>
+  </div>
+
   <!-- Quick test -->
   <div class="card mb-4">
     <div class="card-body p-4">
@@ -371,7 +404,7 @@ async function refresh() {
       document.getElementById('llmHttp').textContent = llm.http_status ?? '—';
       document.getElementById('llmUrl').textContent = svc._meta?.llm_url ?? '—';
       document.getElementById('llmUrl').title = svc._meta?.llm_url ?? '';
-      refreshLlmTraffic();
+      refreshLlmTraffic(); refreshFigures();
     } else {
       llmCard.classList.add('muted');
       llmHint.textContent = '현재 LLM 컨테이너가 떠 있지 않습니다. mode-llm.sh 또는 mode-llm+ocr.sh 로 전환하면 활성화됩니다.';
@@ -413,6 +446,43 @@ function shortTime(epochSec) {
   if (!epochSec) return '—';
   const d = new Date(epochSec * 1000);
   return d.toLocaleTimeString('ko-KR', { hour12: false });
+}
+
+async function refreshFigures() {
+  try {
+    const f = await fetch('/api/figures').then(r => r.json());
+    const w = f.worker || {};
+    const badge = document.getElementById('figWorker');
+    let cls = 'bg-secondary', text = '워커 없음';
+    if (!f.worker_api_enabled) { text = '워커 API 꺼짐'; }
+    else if (w.state === 'paused') { cls = 'bg-danger'; text = '정지: ' + (w.paused_reason || '').slice(0, 60); }
+    else if (!w.alive) { cls = 'bg-warning text-dark'; text = '워커 연결 끊김'; }
+    else if (w.state === 'running') { cls = 'bg-success'; text = '실행 중'; }
+    else if (w.state === 'sleeping') { cls = 'bg-info text-dark'; text = '간격 대기'; }
+    else { cls = 'bg-success'; text = '대기 (idle)'; }
+    badge.className = 'badge fs-6 px-3 py-2 ' + cls;
+    badge.textContent = text;
+    const sum = (st) => Object.values(f.items || {}).reduce((a, k) => a + (k[st] || 0), 0);
+    document.getElementById('figQueued').textContent = sum('queued');
+    document.getElementById('figProcessing').textContent = sum('processing');
+    document.getElementById('figDone').textContent = sum('done');
+    document.getElementById('figFailed').textContent = sum('failed') + sum('budget_exhausted');
+    document.getElementById('figCalls').textContent = f.calls_24h?.total ?? '—';
+    document.getElementById('figCallsAvg').textContent =
+      f.calls_24h?.avg_elapsed_s ? `(${f.calls_24h.avg_elapsed_s}s)` : '';
+    document.getElementById('figInterval').textContent = (f.limits?.min_interval_s ?? '—') + 's';
+    document.getElementById('figWs').textContent = f.workspaces ?? '—';
+    document.getElementById('figByKind').textContent = Object.entries(f.items || {})
+      .map(([k, v]) => `${k}: ` + Object.entries(v).map(([s, n]) => `${s} ${n}`).join(', ')).join(' · ') || '아직 잡 없음';
+    document.getElementById('figHint').textContent = w.last_seen
+      ? `워커 ${w.worker_id || ''} ${w.version || ''} · 마지막 접촉 ${shortTime(w.last_seen)}`
+      : '워커가 아직 접속한 적 없음 (scripts/figures_worker.py)';
+    const le = document.getElementById('figLastError');
+    if (f.last_error) { le.style.display = ''; le.textContent = `마지막 오류 ${shortTime(f.last_error.at)} [${f.last_error.kind}/${f.last_error.status}] ${f.last_error.error || ''}`; }
+    else { le.style.display = 'none'; }
+  } catch (e) {
+    document.getElementById('figWorker').textContent = '조회 실패';
+  }
 }
 
 async function refreshLlmTraffic() {
