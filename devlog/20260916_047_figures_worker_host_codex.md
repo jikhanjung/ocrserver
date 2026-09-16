@@ -72,6 +72,22 @@ PaperMeister `a77bd64` 가 `docs/figure_server_spec_v2.md` + `papermeister/figur
 실행: `docker run --rm -e FIGURES_WORKER_TOKEN=t -e PM_PROMPTS_DIR=/pm_prompts -v $PWD/wrapper:/app -v $PWD/scripts:/worker_scripts:ro
 -v <prompts>:/pm_prompts:ro -w /app honestjung/ocrwrapper:0.3.3 sh -c 'pip install -q requests pillow; python -m tests.contract_spec_v2'`
 
+## 추가 — panels 파일럿 선행 실행 (같은 날 밤, 클라이언트 H 전)
+
+라이브 OCR 코퍼스(PaperMeister 잡)에서 "같은 쪽 캡션에 하위 라벨 4개 이상" 인 큰 Figure 블록 6장을 골라(전부 형태계측·계통 그래프류,
+화석 플레이트는 아님) fsis 프롬프트로 panels 잡을 제출, 분리 실행 워커가 5분 간격으로 처리했다. 첫 항목 도중 SIGTERM 으로 release 도 실증.
+
+| 도판 | kind | compound | 패널 | 초 |
+|---|---|---|---|---|
+| Hughes+ 1999 p8 (계통수) | diagram | **false** — "1–9 는 형질 변화 번호, 패널 아님" | 1 | 70 |
+| Álvaro+ 2018 p14 (CVA) ×2 판본 | chart | true | (a)–(e) ×2, 공유 범례 제외 | 81·82 |
+| Webster 2011 p27 | mixed | true | 1–5 | 70 |
+| Tanabe+ 2015 p4 (relative warp) | chart | true | A–D, TPS 격자 포함 | 70 |
+| Hopkins & Webster 2009 p20 (PCA) | chart | true | 1–5 | 88 |
+
+6/6 done, 실패 0, 도판당 70–88 s. 캡션의 하위 라벨 형식(괄호 소문자·대문자·숫자)을 그대로 읽었고 공유 범례를 패널로 안 세는 판단이
+프롬프트대로 나온다. 상자·크롭 시트는 Artifact 로 사용자에게 (세션 산출물). 워커 산출물 `/srv/ocrserver/figure_ws/<hash>/panels/…`.
+
 ## 남은 것
 
 - detect·link 의 **실제 프롬프트**는 PaperMeister G 단계에서 온다. 여기서 쓴 detect 프롬프트는 e2e 용이며 저장소에 두지 않았다.

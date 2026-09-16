@@ -872,6 +872,7 @@ llm          vllm/vllm-openai:latest       Exited
   스키마는 required 전부·additionalProperties false) + `scripts/link_figures.py --dump`·`split_panels.py --dump`의 실제 요청 JSON(테스트 픽스처 후보).
   **다음은 PaperMeister H**(HTTP 클라이언트·레인의 제출/폴링/반영·detect 반영) — 서버 쪽은 첫 실제 호출을 함께 지켜보는 것.
   ✅ 서버 쪽 대조 (같은 밤): `wrapper/tests/contract_spec_v2.py` 가 그 프롬프트·스키마 실물로 명세 §4–§6 요청·응답을 통과 (27 checks). 서버·워커 변경 불필요.
+  ✅ panels 파일럿 6장(라이브 코퍼스, fsis 프롬프트) 6/6 done, 70–88 s/장 — devlog 047 표. 서버·워커는 실사용 준비 끝.
 
 **2026-09-14 추가:**
 
