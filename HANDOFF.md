@@ -867,7 +867,10 @@ llm          vllm/vllm-openai:latest       Exited
   + 쪽 의심 자리표시 행 + verdict `merge`)은 서버 0.3.2·워커에 반영됨. 서버가 더 기다리는 건 G 의 명세 v2·프롬프트 3벌.
 - **워커 유닛 설치 (sudo, 사용자)** — devlog 047 §설치 4줄. 그 뒤 `/status` 카드가 "대기 (idle)", `journalctl -u ocrserver-figures-worker -f`.
 - **워커 재시작 규칙**: 항목 처리 중(`running`) 에 `systemctl restart` 하면 그 항목은 heartbeat 1800 s 뒤에야 재큐. `sleeping`/`idle` 일 때 할 것.
-- 도판 분할 다음은 PaperMeister G 단계(명세 v2 + 프롬프트 3벌) 대기. 서버·워커는 준비 끝.
+- ✅ **PaperMeister G 완료 (09-16 밤, PaperMeister `a77bd64`)** — `docs/figure_server_spec_v2.md`(항목 내용·응답 스키마, **wrapper 0.3.2 전송 형식에 맞춤**: `items[].key` · link는 논문당 항목 하나 · detect 항목은
+  `page`+`hint_boxes`+`figure_keys` 옆에 모델용 `figures[]`·`reasons`·`hints`) + `papermeister/figure_prompts/`(detect·link·panels `.md`+`.schema.json`, 요청에 실려 오므로 복사 불필요;
+  스키마는 required 전부·additionalProperties false) + `scripts/link_figures.py --dump`·`split_panels.py --dump`의 실제 요청 JSON(테스트 픽스처 후보).
+  **다음은 PaperMeister H**(HTTP 클라이언트·레인의 제출/폴링/반영·detect 반영) — 서버 쪽은 첫 실제 호출을 함께 지켜보는 것.
 
 **2026-09-14 추가:**
 
