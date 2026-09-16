@@ -17,6 +17,10 @@
 | D2 | **② 캡션 연결·분할도 Astra** | **변경**: `claude -p`(Opus 5) 안 씀. 워커는 `codex` 하나만 |
 | D3 | 도판 추출(①)은 클라이언트 | 같음 |
 | D4 | ①이 의심스러운 도판은 Astra 가 재판정하되, **주변 쪽을 더 볼지·텍스트 전체를 훑을지는 Astra 가 스스로 판단** | **추가**: `POST /figures/detect` + **논문 작업 폴더**(§3.3). ②도 같은 폴더를 쓴다 |
+| D5 | P17 §3.2 채택 — **프롬프트·스키마는 요청에 실려 온다** | 서버는 스키마 검증만. 워커에 도메인 프롬프트 없음 |
+| D6 | P17 §3.5 채택 — `panel_key` 에 entries 없음 | 서버 dedup 키도 같은 원칙(입력의 정체만) |
+| D7 | ② **Astra 확정**, Opus 복귀 없음 | 워커는 `codex` 만. `claude` CLI 경로를 두지 않는다 |
+| D8 | 호출 속도 **5분에 1건**으로 시작 | `FIGURES_MIN_INTERVAL=300` (초, 단계 무관, 워커 전역). 일일 상한은 두지 않는다 |
 
 그리고 처음 초안(오늘 오전)에서 P16 을 읽은 뒤 버린 것: `/split` 이라는 별도 이름 · 1-based 쪽 번호 · 패널 좌표를 페이지
 permille 로 환산해 주기 · wrapper 컨테이너 안에서 codex 호출. 전부 P16 §6 을 따른다 — 0-based, 패널은 도판 이미지 기준
@@ -128,7 +132,8 @@ item/target.png     대상 쪽 150dpi + 힌트 상자 빨강 (이건 `--image` �
   **시도로 세지 않고** 워커를 멈추고 잡을 `paused` 로. 한도 해제 시각은 문구에서 읽되 박아두지 않는다(P16 §6.5).
   운영자가 `codex login` 후 `/resume`.
 - **사용량 기록**: 호출마다 kind·model·prompt_version·CLI usage·경과를 `figure_calls` 에(`llm_requests` 와 같은 방식).
-- **일일 상한** `FIGURES_DAILY_LIMIT`(호출 수). 넘으면 `paused`, 다음 날 자동 재개. 값은 사용자가 정한다.
+- **호출 간격** `FIGURES_MIN_INTERVAL=300`(초, D8): 워커가 `codex exec` 를 한 번 끝낸 뒤 다음 호출까지 최소 300 초 대기.
+  단계(detect/link/panels) 무관 전역. 하루 ≈ 288건 상한이 자연히 생긴다. 로그(`figure_calls`)를 보며 `.env` 로 조정.
 - **`/status`**: figures 큐 카드(대기·처리·오늘 호출·마지막 치명 오류·워커 heartbeat).
 - **TTL**: 결과 30일(P16 §6.5). 진실의 원천은 클라이언트 DB.
 - **속도 현실**: detect·link 는 에이전트 세션이라 미실측(상한 10/20분) · panels 도판당 90–130 s(fsis 초기)→15–30 s(운영). 전부 직렬.
@@ -139,8 +144,7 @@ item/target.png     대상 쪽 150dpi + 힌트 상자 빨강 (이건 `--image` �
 ## 5. 하지 않을 것
 
 - 서버 쪽 레이아웃 파싱·규칙 기반 도판 판정·의심 사유 판정 (D3, 클라이언트 `figures.py`).
-- Astra 외 모델·백엔드 교체 계층 (D1·D2). `options.model` 은 받되 워커는 `codex` 만 안다.
-  (② 품질이 파일럿에서 못 미쳐 Opus 로 되돌리면 그때 `claude` CLI 경로를 워커에 더한다 — 클라이언트 계획 §3.)
+- Astra 외 모델·백엔드 교체 계층 (D1·D2·D7). `options.model` 은 받되 워커는 `codex` 만 안다. `claude` CLI 경로 없음.
 - 서버 → 클라이언트 콜백. 폴링 + `GET /figures/jobs` 회수.
 - 패널 이미지 서버 저장. bbox 만.
 - 새 chandra 이미지 빌드.
@@ -155,13 +159,11 @@ item/target.png     대상 쪽 150dpi + 힌트 상자 빨강 (이건 `--image` �
 | 1 | wrapper 0.3.0: `/pdfs`, `figure_jobs`·`figure_items`, `/figures/*` 접수·조회·resume, 내부 claim/result/heartbeat, dedup, 공평 분배, `/status` 카드 | 2일 |
 | 2 | `scripts/figures_worker.py` + systemd: claim 루프, **작업 폴더 빌더**(DB 텍스트 + 전 쪽 렌더 + 힌트 상자), `codex exec -C` 래퍼(`astra_cli_bbox.run_command` 재사용), 스키마 검증, 세션 상한, 치명 정지, 사용량 기록, 일일 상한 | 2–3일 |
 | 3 | 검증: fsis 파일럿 도판 5장 panels → fsis Astra 결과와 패널 수·bbox 비교(같은 모델·프롬프트라 일치해야) · detect 는 devlog 261 "본문이 도판" 14건 + P38 플레이트 설명 사례 · link 1편 시간·`pages_consulted`·usage 측정 · **Codex 가 폴더 이미지를 열 수 있는지 먼저** | 1일 |
-| 4 | 운영: 로그인 만료 알림, `FIGURES_DAILY_LIMIT` 값, HANDOFF·WRAPPER_API 문서 | 반나절 |
+| 4 | 운영: 로그인 만료 알림, `FIGURES_MIN_INTERVAL` 조정, HANDOFF·WRAPPER_API 문서 | 반나절 |
 
 ---
 
-## 7. 남은 확인
+## 7. 결정 기록 (2026-09-16, 사용자)
 
-- P17 🔴 2건(프롬프트 소재 · `panel_key`) — 클라이언트 계획 §5 권고는 둘 다 채택. 사용자 결정 대기.
-- `FIGURES_DAILY_LIMIT` 초기값. 서버의 `codex` 는 개인 ChatGPT 구독이고 PaperMeister 인스턴스 둘(`papermeister-7355a25d`,
-  `-7ceac4ea`)이 같이 쓴다.
-- 워커 계정: jikhanjung(codex 로그인이 여기 있음). systemd 유저 유닛 vs 시스템 유닛 — `ocrserver-metrics` 와 같은 방식으로.
+P17 🔴 2건 채택(D5·D6) · ② Astra 확정(D7) · 호출 5분에 1건(D8). 남은 확인은 워커 계정·systemd 유닛 형태뿐이며 구현 시 정한다
+(jikhanjung, `ocrserver-metrics` 와 같은 방식이 기본).
