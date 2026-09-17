@@ -447,6 +447,8 @@ wrapper 는 접수·큐·결과 저장만 한다. 프롬프트와 결과 JSON �
 | `POST` | `/figures/{kind}/{job_id}/resume?retry_errors=` | 실패·예산 소진 항목 재큐. `retry_errors=true` 면 시도 횟수 초기화 |
 | `POST` | `/figures/worker/resume` | 치명 정지(로그인 만료·한도) 해제. 호스트에서 원인을 고친 뒤 호출 |
 | `GET` | `/api/figures` | 대시보드 요약 (워커 상태·큐·24h 호출·마지막 오류) |
+| `GET` | `/api/figures/items?status=&kind=&client_id=&limit=` | 항목 목록 — 진행·대기 먼저, 그다음 최근 완료 순. 항목마다 쪽수·시도·경과·토큰·결과 요약(link: 도판/항목/skipped, panels: 패널 수, detect: 도판/dismiss)·오류 |
+| `GET` | `/figures` | **큐 페이지** (HTML, 30초 자동 갱신) — 워커 상태, 진행/대기/완료 수, 편당 평균과 남은 시간 추정, 항목 표 |
 | `POST` | `/internal/figures/*` | 워커 전용 (claim · heartbeat · result · **release**(종료 시 즉시 재큐, 시도 환불) · worker/status · workspace). `X-Worker-Token` + nginx 에서 loopback·docker 브리지만 허용 |
 
 ### POST /figures/{kind}

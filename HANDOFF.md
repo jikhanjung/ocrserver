@@ -32,13 +32,13 @@
 >   (「곧 해야 할 작업」).
 > - ⚠️ **배포 규칙** (유지): wrapper/llmwrapper 재생성은 `up -d --no-deps`.
 >   `nginx.conf` 를 **에디터/`mv` 로 교체하지 말 것** (inode 고정). `cp` OK.
-> - **도판 분할 (devlog 046·047)**: wrapper **0.3.3** (0.3.2: detect 항목 쪽 단위 `hint_boxes[]` · 0.3.3: 종료 시 `release` 로 즉시 재큐) — `/pdfs`, `/figures/*`, `/api/figures`, `/internal/figures/*`.
+> - **도판 분할 (devlog 046·047)**: wrapper **0.3.4** (0.3.2 detect `hint_boxes[]` · 0.3.3 `release` · 0.3.4 **큐 페이지 `/figures`** + `/api/figures/items`) — `/pdfs`, `/figures/*`, `/api/figures`, `/internal/figures/*`.
 >   호스트 워커 `scripts/figures_worker.py` 는 **systemd 유닛 `ocrserver-figures-worker` 로 09-17 00:06 UTC 부터 가동**
 >   (User=jikhanjung, 인터프리터 `~/venv/ocrserver/bin/python3` — 시스템 python3 엔 fitz 없음). e2e(panels 70 s · detect 95 s) +
 >   panels 파일럿 6/6 통과. 워커 상태는 `/status` 카드·`GET /api/figures`·`journalctl -u ocrserver-figures-worker -f`.
 >   `.env`: `FIGURES_WORKER_TOKEN`, `FIGURES_MIN_INTERVAL=300`. nginx `/internal/` 은 loopback+172.18/16 만.
 >   OCR 경로 무변 (회귀 15/15). 스모크 56 checks. e2e 산출물은 `/srv/ocrserver/figure_ws/510ea212…/`(3.6MB, 7일 TTL).
-> - 이미지: `ocrwrapper:0.3.3`, `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
+> - 이미지: `ocrwrapper:0.3.4`, `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
 
 > **(이전 박스, 2026-09-08 — nginx upstream resolve, devlog 043)**
 > - chandra-b 정지 후 wrapper 재생성 → wrapper 가 chandra-b 의 옛 IP
@@ -884,10 +884,11 @@ llm          vllm/vllm-openai:latest       Exited
   로 진행 확인. `budget_exhausted` 가 나오면 그 편의 쪽수·`run/aN/events.jsonl` 을 보고 상한 또는 지시문 조정.
 - ✅ **워커 수정본 설치됨 (08:09 UTC)** — 재연결 알림 오판·stall 감시(`FIGURES_IDLE_TIMEOUT` 900 s)·재시작 시 간격 유지.
   stall 로 상한 초과됐던 잡 `62e3bf3b` 는 resume 되어 2차 시도 중. 다음 재시작부터는 `figure_ws/.next_call_at` 로 간격이 유지된다.
+- **큐 페이지**: `http://<host>:8080/figures` — 워커 상태·진행/대기·편당 평균·남은 시간·항목 표(30 s 갱신). `/status` 카드에서 링크.
 - **큐 관찰 (08:10)**: link 완료 19 · 처리 1 · 대기 11(≈930쪽, 최대 291쪽), 편당 평균 642 s → ≈ 3 h. 긴 논문의 `skipped` 가 많다
   (116쪽: 도판 4 / skipped 44 · 231쪽: skipped 49) — 실패는 아니고 클라이언트 검증 단계의 숫자. 끝나면 `budget_exhausted`·
   `failed` 유무와 재연결 횟수(워커 로그 "reconnected Nx") 를 한 번 훑을 것.
-- PaperMeister 에 전달: 같은 논문(e5def301…, 78쪽)이 같은 초에 link 잡 3개로 들어옴 — 레인의 중복 제출 확인.
+- ~~PaperMeister 에 전달: 같은 논문 3중 제출~~ → 클라이언트가 고침(`acacde5`: Zotero 부모 셋에 걸린 PDF 라 PaperFile 행 셋 → 해시당 1회 제출 + 형제 행에 전파). 서버 dedup 은 그대로.
 - **워커 스크립트 갱신 절차**: dev 트리 수정 → `sudo cp scripts/figures_worker.py /srv/ocrserver/scripts/` → 재시작. 재시작은
   sudo 없이도 됨: `kill -TERM $(systemctl show ocrserver-figures-worker -p MainPID --value)` → release + systemd 가 30 s 안에 재기동.
   `.env` 변경도 같은 방법. 유닛 파일이 바뀌면 `sudo systemctl daemon-reload`. 큐가 돌 때는 `/status` 가 "간격 대기(sleeping)" 일 때.

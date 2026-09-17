@@ -26,7 +26,7 @@ import uuid
 
 import aiosqlite
 from fastapi import APIRouter, File, Form, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import HTMLResponse, Response
 
 router = APIRouter()
 
@@ -635,6 +635,105 @@ async def api_figures():
         "limits": {"min_interval_s": MIN_INTERVAL, "max_attempts": MAX_ATTEMPTS,
                    "heartbeat_timeout_s": HEARTBEAT_TIMEOUT},
     }
+
+
+def _result_summary(kind: str, result: dict | None) -> dict:
+    """Small, kind-specific digest of a stored result for the queue page."""
+    if not isinstance(result, dict):
+        return {}
+    try:
+        if kind == "link":
+            figs = result.get("figures") or []
+            return {"figures": len(figs), "entries": sum(len(f.get("entries") or []) for f in figs),
+                    "skipped": len(result.get("skipped") or []),
+                    "pages_consulted": len(result.get("pages_consulted") or [])}
+        if kind == "panels":
+            return {"panels": len(result.get("panels") or []), "compound": result.get("is_compound"),
+                    "figure_kind": result.get("figure_kind"), "reason": result.get("non_compound_reason")}
+        if kind == "detect":
+            return {"figures": len(result.get("figures") or []), "dismiss": len(result.get("dismiss") or []),
+                    "pages_consulted": len(result.get("pages_consulted") or [])}
+    except Exception:
+        pass
+    return {}
+
+
+def _request_summary(kind: str, req: dict | None) -> dict:
+    if not isinstance(req, dict):
+        return {}
+    if kind == "link":
+        return {"figures": len(req.get("figures") or []), "page_count": req.get("page_count")}
+    if kind == "detect":
+        return {"page": req.get("page"), "hint_boxes": len(req.get("hint_boxes") or []),
+                "reasons": req.get("reasons")}
+    if kind == "panels":
+        return {"page": req.get("page"), "entries": len(req.get("entries") or [])}
+    return {}
+
+
+@router.get("/api/figures/items")
+async def api_figure_items(
+    status: str | None = Query(None, description="comma-separated"),
+    kind: str | None = Query(None),
+    client_id: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+):
+    where, params = [], []
+    if status:
+        sts = [x.strip() for x in status.split(",") if x.strip()]
+        where.append("i.status IN (%s)" % ",".join("?" * len(sts))); params += sts
+    if kind:
+        where.append("i.kind=?"); params.append(kind)
+    if client_id:
+        where.append("i.client_id=?"); params.append(client_id)
+    sql = ("SELECT i.item_id, i.key, i.kind, i.client_id, i.file_hash, i.status, i.attempts, i.elapsed_s, "
+           "i.usage_json, i.error, i.claimed_at, i.heartbeat_at, i.completed_at, i.result_json, i.request_json, "
+           "i.model, j.job_id, j.submitted_at, j.prompt_version, w.page_count "
+           "FROM figure_items i JOIN figure_jobs j ON j.job_id=i.job_id "
+           "LEFT JOIN figure_workspaces w ON w.file_hash=i.file_hash AND w.ocr_digest=i.ocr_digest")
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += (" ORDER BY CASE i.status WHEN 'processing' THEN 0 WHEN 'queued' THEN 1 ELSE 2 END, "
+            "CASE WHEN i.status IN ('processing','queued') THEN j.submitted_at END ASC, "
+            "COALESCE(i.completed_at, i.claimed_at, j.submitted_at) DESC LIMIT ?")
+    params.append(limit)
+    async with _db().execute(sql, params) as c:
+        rows = [dict(r) for r in await c.fetchall()]
+    items = []
+    for r in rows:
+        usage = json.loads(r["usage_json"]) if r.get("usage_json") else {}
+        result = json.loads(r["result_json"]) if r.get("result_json") else None
+        req = json.loads(r["request_json"]) if r.get("request_json") else None
+        items.append({
+            "item_id": r["item_id"], "job_id": r["job_id"], "key": r["key"], "kind": r["kind"],
+            "client_id": r["client_id"], "file_hash": r["file_hash"], "status": r["status"],
+            "attempts": r["attempts"], "elapsed_s": r["elapsed_s"], "error": r["error"],
+            "submitted_at": r["submitted_at"], "claimed_at": r["claimed_at"],
+            "heartbeat_at": r["heartbeat_at"], "completed_at": r["completed_at"],
+            "page_count": r["page_count"], "model": r["model"], "prompt_version": r["prompt_version"],
+            "input_tokens": usage.get("input_tokens"), "cached_tokens": usage.get("cached_input_tokens"),
+            "output_tokens": usage.get("output_tokens"),
+            "request": _request_summary(r["kind"], req),
+            "summary": _result_summary(r["kind"], result),
+        })
+    # per-kind averages of finished sessions (last 24h) so the page can estimate the queue
+    async with _db().execute(
+        "SELECT kind, AVG(elapsed_s), COUNT(*) FROM figure_items WHERE status='done' "
+        "AND completed_at >= ? GROUP BY kind", (time.time() - 86400,)) as c:
+        avg = {k: {"avg_elapsed_s": round(a or 0), "n": n} for k, a, n in await c.fetchall()}
+    return {"items": items, "avg_24h": avg, "min_interval_s": MIN_INTERVAL,
+            "worker": _worker_public(await _worker_row())}
+
+
+_PAGE_CACHE: dict = {}
+
+
+@router.get("/figures", response_class=HTMLResponse)
+async def figures_page():
+    if "html" not in _PAGE_CACHE:
+        with open(os.path.join(os.path.dirname(__file__), "figures.html"), encoding="utf-8") as f:
+            _PAGE_CACHE["html"] = f.read()
+    return _PAGE_CACHE["html"]
 
 
 # ── internal API (host worker) ────────────────────────────────────────────────

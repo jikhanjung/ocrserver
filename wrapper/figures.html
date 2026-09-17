@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>도판 분할 큐 — ocrserver</title>
+  <link rel="stylesheet" href="/static/bootstrap.min.css">
+  <style>
+    body { background: #f4f6f9; }
+    .metric-label { font-size: .78rem; color: #6c757d; text-transform: uppercase; letter-spacing: .04em; }
+    .metric-value { font-size: 1.5rem; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; }
+    table { font-variant-numeric: tabular-nums; }
+    td, th { white-space: nowrap; vertical-align: middle; }
+    td.wrap { white-space: normal; max-width: 34rem; }
+    .st-processing { background: #0d6efd; } .st-queued { background: #adb5bd; color: #222; }
+    .st-done { background: #198754; } .st-failed, .st-budget_exhausted { background: #dc3545; }
+    .bar { height: 6px; background: #dee2e6; border-radius: 3px; overflow: hidden; }
+    .bar > div { height: 100%; background: #0d6efd; transition: width .5s; }
+    .muted { color: #6c757d; }
+    .refresh-badge { font-size: .72rem; color: #adb5bd; }
+  </style>
+</head>
+<body>
+<div class="container-xl py-4">
+  <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div>
+      <h4 class="mb-0 fw-semibold">도판 분할 큐</h4>
+      <div class="muted small">wrapper 호스트 워커 · Astra / Codex CLI · <a href="/status">서비스 상태</a> · <a href="/">OCR 대시보드</a></div>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+      <select id="kindSel" class="form-select form-select-sm" style="width:auto">
+        <option value="">모든 종류</option><option value="link">link</option><option value="detect">detect</option><option value="panels">panels</option>
+      </select>
+      <select id="clientSel" class="form-select form-select-sm" style="width:auto"><option value="">모든 클라이언트</option></select>
+      <span id="workerBadge" class="badge fs-6 px-3 py-2 bg-secondary">확인 중...</span>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-6 col-md-2"><div class="card h-100"><div class="card-body p-3"><div class="metric-label">처리 중</div><div class="metric-value" id="mProcessing">—</div><div class="small muted" id="mProcessingHint"></div></div></div></div>
+    <div class="col-6 col-md-2"><div class="card h-100"><div class="card-body p-3"><div class="metric-label">대기</div><div class="metric-value" id="mQueued">—</div><div class="small muted" id="mQueuedPages"></div></div></div></div>
+    <div class="col-6 col-md-2"><div class="card h-100"><div class="card-body p-3"><div class="metric-label">완료 / 실패</div><div class="metric-value"><span id="mDone">—</span> <span class="fs-6 fw-normal muted">/ <span id="mFailed">—</span></span></div><div class="small muted">표시 범위 안</div></div></div></div>
+    <div class="col-6 col-md-2"><div class="card h-100"><div class="card-body p-3"><div class="metric-label">편당 평균 (24h)</div><div class="metric-value" id="mAvg">—</div><div class="small muted" id="mAvgHint"></div></div></div></div>
+    <div class="col-6 col-md-2"><div class="card h-100"><div class="card-body p-3"><div class="metric-label">남은 시간 추정</div><div class="metric-value" id="mEta">—</div><div class="small muted">평균 + 간격 × 대기</div></div></div></div>
+    <div class="col-6 col-md-2"><div class="card h-100"><div class="card-body p-3"><div class="metric-label">호출 간격</div><div class="metric-value" id="mInterval">—</div><div class="small muted" id="mNext"></div></div></div></div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-body p-3">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h6 class="fw-semibold mb-0">진행 · 대기</h6>
+        <span class="refresh-badge" id="lastRefresh"></span>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0" id="activeTable">
+          <thead><tr><th>상태</th><th>종류</th><th>클라이언트</th><th>논문</th><th class="text-end">쪽</th><th>요청</th><th class="text-end">시도</th><th>시작</th><th class="text-end">경과</th><th>진행</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="muted small py-2" id="activeEmpty" style="display:none">큐가 비어 있습니다.</div>
+    </div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-body p-3">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h6 class="fw-semibold mb-0">완료 · 실패 <span class="muted fw-normal small">최근 순</span></h6>
+        <div class="form-check form-check-inline small mb-0"><input class="form-check-input" type="checkbox" id="onlyProblems"><label class="form-check-label" for="onlyProblems">문제만</label></div>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0" id="doneTable">
+          <thead><tr><th>상태</th><th>종류</th><th>클라이언트</th><th>논문</th><th class="text-end">쪽</th><th class="text-end">시도</th><th>끝</th><th class="text-end">초</th><th class="text-end">토큰 in/out</th><th>결과</th><th class="wrap">오류</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmtT = (s) => s ? new Date(s * 1000).toLocaleTimeString('ko-KR', {hour12: false}) : '—';
+const fmtDur = (s) => { if (s == null) return '—'; s = Math.round(s); if (s < 60) return s + 's'; const m = Math.floor(s / 60); return m < 60 ? `${m}m ${s % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`; };
+const fmtK = (n) => n == null ? '—' : (n >= 1000 ? (n / 1000).toFixed(n >= 100000 ? 0 : 1) + 'k' : n);
+const badge = (st) => `<span class="badge st-${st}">${st}</span>`;
+const paper = (it) => `<span class="mono" title="${it.key}">${(it.file_hash || '').slice(0, 10)}</span>`;
+const clientShort = (c) => (c || '—').replace('papermeister-', 'pm-');
+
+function reqText(it) {
+  const r = it.request || {};
+  if (it.kind === 'link') return `도판 ${r.figures ?? '?'}`;
+  if (it.kind === 'detect') return `p${r.page} · 힌트 ${r.hint_boxes ?? 0}${r.reasons ? ' · ' + r.reasons.join(',') : ''}`;
+  if (it.kind === 'panels') return `p${r.page} · 항목 ${r.entries ?? 0}`;
+  return '';
+}
+function resText(it) {
+  const s = it.summary || {};
+  if (it.status !== 'done') return '';
+  if (it.kind === 'link') return `도판 ${s.figures} · 항목 ${s.entries} · skipped ${s.skipped}` + (s.skipped > 0 && s.skipped >= s.figures ? ' ⚠' : '');
+  if (it.kind === 'panels') return s.compound ? `패널 ${s.panels} · ${s.figure_kind}` : `단일 (${s.figure_kind}${s.reason ? ', ' + s.reason : ''})`;
+  if (it.kind === 'detect') return `도판 ${s.figures} · dismiss ${s.dismiss}`;
+  return '';
+}
+
+let clientsSeen = new Set();
+async function refresh() {
+  const kind = $('kindSel').value, client = $('clientSel').value;
+  const q = new URLSearchParams({limit: 300}); if (kind) q.set('kind', kind); if (client) q.set('client_id', client);
+  let d;
+  try { d = await fetch('/api/figures/items?' + q).then(r => r.json()); }
+  catch (e) { $('workerBadge').textContent = '조회 실패'; return; }
+  const w = d.worker || {};
+  const wb = $('workerBadge');
+  let cls = 'bg-secondary', text = '워커 없음';
+  if (w.state === 'paused') { cls = 'bg-danger'; text = '정지: ' + (w.paused_reason || '').slice(0, 50); }
+  else if (!w.alive) { cls = 'bg-warning text-dark'; text = '워커 연결 끊김'; }
+  else if (w.state === 'running') { cls = 'bg-primary'; text = '실행 중'; }
+  else if (w.state === 'sleeping') { cls = 'bg-info text-dark'; text = '간격 대기'; }
+  else { cls = 'bg-success'; text = '대기 (idle)'; }
+  wb.className = 'badge fs-6 px-3 py-2 ' + cls; wb.textContent = text;
+
+  const items = d.items || [];
+  items.forEach(it => { if (it.client_id) clientsSeen.add(it.client_id); });
+  const sel = $('clientSel');
+  if (sel.options.length - 1 !== clientsSeen.size) {
+    const cur = sel.value; sel.innerHTML = '<option value="">모든 클라이언트</option>' + [...clientsSeen].sort().map(c => `<option value="${c}" ${c === cur ? 'selected' : ''}>${c}</option>`).join('');
+  }
+  const active = items.filter(i => i.status === 'processing' || i.status === 'queued');
+  const done = items.filter(i => !(i.status === 'processing' || i.status === 'queued'));
+  const nProc = active.filter(i => i.status === 'processing').length, nQ = active.length - nProc;
+  const qPages = active.filter(i => i.status === 'queued').reduce((a, i) => a + (i.page_count || 0), 0);
+  $('mProcessing').textContent = nProc; $('mQueued').textContent = nQ;
+  $('mQueuedPages').textContent = qPages ? `${qPages} 쪽` : '';
+  $('mDone').textContent = done.filter(i => i.status === 'done').length;
+  $('mFailed').textContent = done.filter(i => i.status !== 'done').length;
+  const kinds = kind ? [kind] : ['link', 'detect', 'panels'];
+  const avgs = d.avg_24h || {};
+  const avgOf = (k) => (avgs[k] || {}).avg_elapsed_s;
+  const mainKind = kind || (active[0] && active[0].kind) || 'link';
+  const avg = avgOf(mainKind);
+  $('mAvg').textContent = avg ? fmtDur(avg) : '—';
+  $('mAvgHint').textContent = avg ? `${mainKind} · ${(avgs[mainKind] || {}).n}건` : '완료 표본 없음';
+  const interval = d.min_interval_s || 300;
+  $('mInterval').textContent = fmtDur(interval);
+  $('mNext').textContent = (w.state === 'sleeping' && w.next_call_at) ? '다음 호출 ' + fmtT(w.next_call_at) : '';
+  // ETA: for each queued item use its kind's average; running item: remaining of avg
+  let eta = 0;
+  active.forEach(i => { const a = avgOf(i.kind) || 300; if (i.status === 'processing') eta += Math.max(0, a - (Date.now() / 1000 - (i.claimed_at || Date.now() / 1000))); else eta += a; eta += interval; });
+  $('mEta').textContent = active.length ? fmtDur(eta) : '—';
+  $('mProcessingHint').textContent = nProc ? `${clientShort(active.find(i => i.status === 'processing').client_id)}` : '';
+
+  const now = Date.now() / 1000;
+  const at = $('activeTable').querySelector('tbody');
+  at.innerHTML = active.map(i => {
+    const a = avgOf(i.kind) || 300; const el = i.status === 'processing' ? now - (i.claimed_at || now) : null;
+    const pct = el != null ? Math.min(100, Math.round(100 * el / a)) : 0;
+    return `<tr><td>${badge(i.status)}</td><td>${i.kind}</td><td>${clientShort(i.client_id)}</td><td>${paper(i)}</td><td class="text-end">${i.page_count ?? '—'}</td><td>${reqText(i)}</td><td class="text-end">${i.attempts}</td><td>${i.status === 'processing' ? fmtT(i.claimed_at) : fmtT(i.submitted_at)}</td><td class="text-end">${el != null ? fmtDur(el) : '—'}</td><td style="min-width:8rem">${el != null ? `<div class="bar"><div style="width:${pct}%"></div></div>` : ''}</td></tr>`;
+  }).join('');
+  $('activeEmpty').style.display = active.length ? 'none' : '';
+
+  const onlyP = $('onlyProblems').checked;
+  const dt = $('doneTable').querySelector('tbody');
+  dt.innerHTML = done.filter(i => !onlyP || i.status !== 'done' || (i.summary && i.summary.skipped > 0 && i.summary.skipped >= i.summary.figures)).map(i =>
+    `<tr><td>${badge(i.status)}</td><td>${i.kind}</td><td>${clientShort(i.client_id)}</td><td>${paper(i)}</td><td class="text-end">${i.page_count ?? '—'}</td><td class="text-end">${i.attempts}</td><td>${fmtT(i.completed_at)}</td><td class="text-end">${i.elapsed_s != null ? Math.round(i.elapsed_s) : '—'}</td><td class="text-end">${fmtK(i.input_tokens)}/${fmtK(i.output_tokens)}</td><td>${resText(i)}</td><td class="wrap small text-danger">${(i.error || '').replace(/ — \\/srv.*$/, '')}</td></tr>`
+  ).join('');
+  $('lastRefresh').textContent = '갱신 ' + new Date().toLocaleTimeString('ko-KR', {hour12: false}) + ' · 30초마다';
+}
+['kindSel', 'clientSel', 'onlyProblems'].forEach(id => $(id).addEventListener('change', refresh));
+refresh(); setInterval(refresh, 30000);
+</script>
+</body>
+</html>

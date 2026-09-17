@@ -214,6 +214,15 @@ with TestClient(main.app) as c:
     ok(r.json()["state"] == "sleeping", "worker status")
     f = c.get("/api/figures").json()
     ok(f["calls_24h"]["total"] >= 8 and f["items"]["panels"]["done"] >= 5 and f["worker"]["alive"], f"summary {json.dumps(f)[:300]}")
+    # queue page + item listing
+    r = c.get("/figures")
+    ok(r.status_code == 200 and "도판 분할 큐" in r.text and "/api/figures/items" in r.text, "queue page served")
+    li = c.get("/api/figures/items?limit=50").json()
+    ok(li["items"] and li["min_interval_s"] == 300 and "panels" in li["avg_24h"], f"items list {json.dumps(li)[:200]}")
+    ok(any(i["summary"].get("panels") == 2 and i["request"]["page"] == 0 and i["input_tokens"] == 10
+           for i in li["items"] if i["kind"] == "panels" and i["status"] == "done"), "item summary fields")
+    ok(all(i["status"] in ("processing", "queued") for i in li["items"][:sum(1 for i in li["items"] if i["status"] in ("processing", "queued"))]), "active items first")
+    ok(len(c.get("/api/figures/items?status=done,failed&kind=panels").json()["items"]) >= 5, "status/kind filters")
     ok(c.get("/api/stats").status_code == 200 and c.get("/health").status_code == 200, "OCR endpoints still fine")
 
 print(f"OK — {checks} checks passed")
