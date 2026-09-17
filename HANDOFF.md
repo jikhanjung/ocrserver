@@ -1,4 +1,4 @@
-# HANDOFF — 2026-09-17 08:10 UTC (도판 분할 실사용 중: link 30편 큐 19 완료 · 워커 수정본 가동)
+# HANDOFF — 2026-09-17 08:21 UTC (도판 분할 실사용 중 · wrapper 0.3.4 큐 페이지 /figures · 워커 수정본 가동)
 
 > **🟢 이 박스가 현재 상태의 전부다.**
 > - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 09-08
@@ -885,9 +885,9 @@ llm          vllm/vllm-openai:latest       Exited
 - ✅ **워커 수정본 설치됨 (08:09 UTC)** — 재연결 알림 오판·stall 감시(`FIGURES_IDLE_TIMEOUT` 900 s)·재시작 시 간격 유지.
   stall 로 상한 초과됐던 잡 `62e3bf3b` 는 resume 되어 2차 시도 중. 다음 재시작부터는 `figure_ws/.next_call_at` 로 간격이 유지된다.
 - **큐 페이지**: `http://<host>:8080/figures` — 워커 상태·진행/대기·편당 평균·남은 시간·항목 표(30 s 갱신). `/status` 카드에서 링크.
-- **큐 관찰 (08:10)**: link 완료 19 · 처리 1 · 대기 11(≈930쪽, 최대 291쪽), 편당 평균 642 s → ≈ 3 h. 긴 논문의 `skipped` 가 많다
-  (116쪽: 도판 4 / skipped 44 · 231쪽: skipped 49) — 실패는 아니고 클라이언트 검증 단계의 숫자. 끝나면 `budget_exhausted`·
-  `failed` 유무와 재연결 횟수(워커 로그 "reconnected Nx") 를 한 번 훑을 것.
+- **큐 관찰 (08:21 UTC)**: . 이후는 `/figures` 페이지에서. 긴 논문의 `skipped` 가 많다(116쪽: 도판 4 / skipped 44 ·
+  231쪽: 49) — 실패는 아니고 클라이언트 검증 단계의 숫자. 큐가 끝나면 `failed`·`budget_exhausted` 유무와 워커 로그의
+  "reconnected Nx" 를 한 번 훑을 것.
 - ~~PaperMeister 에 전달: 같은 논문 3중 제출~~ → 클라이언트가 고침(`acacde5`: Zotero 부모 셋에 걸린 PDF 라 PaperFile 행 셋 → 해시당 1회 제출 + 형제 행에 전파). 서버 dedup 은 그대로.
 - **워커 스크립트 갱신 절차**: dev 트리 수정 → `sudo cp scripts/figures_worker.py /srv/ocrserver/scripts/` → 재시작. 재시작은
   sudo 없이도 됨: `kill -TERM $(systemctl show ocrserver-figures-worker -p MainPID --value)` → release + systemd 가 30 s 안에 재기동.
