@@ -64,7 +64,7 @@ MAX_LONG_PX = int(os.getenv("FIGURES_MAX_LONG_PX", "4000"))
 WS_TTL_DAYS = int(os.getenv("FIGURES_WORKSPACE_TTL_DAYS", "7"))
 # No new stdout from codex for this long → the stream is hung (KOPRI network websocket
 # stalls seen 2026-09-17), kill and retry instead of burning the whole session cap.
-IDLE_TIMEOUT = int(os.getenv("FIGURES_IDLE_TIMEOUT", "900"))
+IDLE_TIMEOUT = int(os.getenv("FIGURES_IDLE_TIMEOUT", "1800"))
 NEXT_CALL_FILE = os.path.join(WS_DIR, ".next_call_at")
 WORKER_ID = os.getenv("FIGURES_WORKER_ID", socket.gethostname())
 DEFAULT_MODEL = "gpt-6-astra"

@@ -884,6 +884,8 @@ llm          vllm/vllm-openai:latest       Exited
   로 진행 확인. `budget_exhausted` 가 나오면 그 편의 쪽수·`run/aN/events.jsonl` 을 보고 상한 또는 지시문 조정.
 - ✅ **워커 수정본 설치됨 (08:09 UTC)** — 재연결 알림 오판·stall 감시(`FIGURES_IDLE_TIMEOUT` 900 s)·재시작 시 간격 유지.
   stall 로 상한 초과됐던 잡 `62e3bf3b` 는 resume 되어 2차 시도 중. 다음 재시작부터는 `figure_ws/.next_call_at` 로 간격이 유지된다.
+- **idle 감시 1800 s** (09:47, `.env` + 코드 기본값): 900 s 는 긴 논문의 최종 JSON 생성 구간을 stall 로 오판했다(devlog 047).
+  109쪽·도판 91 논문 `a95486d6` 이 3차(마지막) 시도 중 — 또 실패하면 `POST /figures/link/<job>/resume?retry_errors=true`.
 - **큐 페이지**: `http://<host>:8080/figures` — 워커 상태·진행/대기·편당 평균·남은 시간·항목 표(30 s 갱신). `/status` 카드에서 링크.
 - **큐 관찰 (08:21 UTC)**: link 완료 20 · 처리 1 · 대기 10(823쪽) · 실패/상한 0 · 24h 평균 link 628 s · 워커 running. 이후는 `/figures` 페이지에서. 긴 논문의 `skipped` 가 많다(116쪽: 도판 4 / skipped 44 ·
   231쪽: 49) — 실패는 아니고 클라이언트 검증 단계의 숫자. 큐가 끝나면 `failed`·`budget_exhausted` 유무와 워커 로그의

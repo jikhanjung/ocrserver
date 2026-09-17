@@ -122,6 +122,15 @@ link 30편 큐를 7시간 돌린 뒤: done 18 · budget_exhausted 1 · 대기 12
 또 하나 관찰: 같은 78쪽 논문이 같은 초에 **세 잡**으로 들어왔다(항목 내용이 달라 dedup 안 걸림). 클라이언트 레인 쪽 중복 제출로
 보이며 서버 문제는 아니다 — PaperMeister 에 전달.
 
+## 추가 — idle 감시 900 s 는 짧았다 (09:47 UTC)
+
+109쪽·도판 91개 러시아어 논문(32f87220…)이 두 번 "stalled" 로 끊겼다. 1차는 `Falling back from WebSockets to HTTPS … websocket closed
+by server` 뒤 침묵 — 진짜 stall. **2차는 마지막 이벤트가 agent_message("I've matched the plate photographs to their explanations…")
+였다** — 읽기를 끝내고 최종 JSON(도판 91개)을 생성하는 중이었고, 그동안은 stdout 에 이벤트가 없다. 첫 편도 출력 26.8k 토큰이었으니
+긴 논문의 최종 생성만 10–20분이 걸릴 수 있다. → `FIGURES_IDLE_TIMEOUT` 를 **1800 s** 로 (라이브 `.env` + 코드 기본값), 하드 상한
+3600 s 는 그대로. 3차(마지막) 시도는 1800 s 로 돌린다. 근본적으로는 "마지막 이벤트가 agent_message 이후" 인 구간에 더 긴 여유를
+주는 게 맞지만, 그 상태를 stdout 만으로 확실히 알 수 없어 일단 시간으로 푼다.
+
 ## 남은 것
 
 - detect·link 의 **실제 프롬프트**는 PaperMeister G 단계에서 온다. 여기서 쓴 detect 프롬프트는 e2e 용이며 저장소에 두지 않았다.
