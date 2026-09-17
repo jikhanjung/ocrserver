@@ -445,6 +445,7 @@ wrapper 는 접수·큐·결과 저장만 한다. 프롬프트와 결과 JSON �
 | `GET` | `/figures/{kind}/{job_id}` | 잡 + 항목별 결과 |
 | `GET` | `/figures/jobs?client_id=&kind=&status=` | 목록 (결과 본문 없음) |
 | `POST` | `/figures/{kind}/{job_id}/resume?retry_errors=` | 실패·예산 소진 항목 재큐. `retry_errors=true` 면 시도 횟수 초기화 |
+| `POST` | `/figures/{kind}/{job_id}/cancel` | 잡의 대기·처리 중 항목을 `cancelled` 로. 처리 중이던 세션은 워커가 다음 heartbeat(≤60 s)에서 끊는다. 멱등 |
 | `POST` | `/figures/worker/resume` | 치명 정지(로그인 만료·한도) 해제. 호스트에서 원인을 고친 뒤 호출 |
 | `GET` | `/api/figures` | 대시보드 요약 (워커 상태·큐·24h 호출·마지막 오류) |
 | `GET` | `/api/figures/items?status=&kind=&client_id=&limit=` | 항목 목록 — 진행·대기 먼저, 그다음 최근 완료 순. 항목마다 쪽수·시도·경과·토큰·결과 요약(link: 도판/항목/skipped, panels: 패널 수, detect: 도판/dismiss)·오류 |
@@ -471,8 +472,8 @@ wrapper 는 접수·큐·결과 저장만 한다. 프롬프트와 결과 JSON �
 
 - **dedup**: `(kind, file_hash, ocr_digest, item 내용, prompt, options)` 해시가 같은 항목이 같은 `client_id` 로
   `done` 이면 재호출 없이 그 결과를 복사한다(`cached`). `force: true` 로 우회.
-- 항목 상태: `queued` → `processing` → `done` | `failed`(시도 3회 소진) | `budget_exhausted`(세션 상한).
-  잡 상태: `queued` | `processing` | `done` | `done_with_errors` | `failed`.
+- 항목 상태: `queued` → `processing` → `done` | `failed`(시도 3회 소진) | `budget_exhausted`(세션 상한) | `cancelled`.
+  잡 상태: `queued` | `processing` | `done` | `done_with_errors` | `failed` | `cancelled`.
 - 워커의 치명 오류(로그인 만료·CLI 없음·사용량 한도)는 **시도로 세지 않고** 항목을 큐로 되돌리며 워커를
   `paused` 로 둔다. `GET` 응답의 `worker.state`·`paused_reason` 으로 보인다. 해제는 `/figures/worker/resume`.
 - 호출 간격 `FIGURES_MIN_INTERVAL`(기본 300 s) 은 워커가 지키고 서버는 알려만 준다.

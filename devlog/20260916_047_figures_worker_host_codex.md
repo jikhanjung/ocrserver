@@ -131,6 +131,14 @@ by server` 뒤 침묵 — 진짜 stall. **2차는 마지막 이벤트가 agent_m
 3600 s 는 그대로. 3차(마지막) 시도는 1800 s 로 돌린다. 근본적으로는 "마지막 이벤트가 agent_message 이후" 인 구간에 더 긴 여유를
 주는 게 맞지만, 그 상태를 stdout 만으로 확실히 알 수 없어 일단 시간으로 푼다.
 
+## 추가 — cancel 엔드포인트 (0.3.5, 10:55 UTC)
+
+109쪽·도판 91 논문은 3차 시도도 3600 s 상한(재연결 6회). 세 시도에 2시간. 큰 답 하나가 이 망의 웹소켓 끊김을 못 넘긴다.
+→ PaperMeister 가 도판 40개 초과 논문의 `figures[]` 를 쪽 순서로 나눠 **같은 잡의 항목 여럿**으로 보내도록 고침(`672de8a`, 서버 변경 없음).
+큐에 단일 항목으로 남아 있던 291쪽·도판 121 잡을 빼 달라는 요청에 `POST /figures/{kind}/{job_id}/cancel` 을 넣었다:
+queued·processing 항목을 `cancelled` 로, 잡 롤업에 `cancelled` 추가, 처리 중이던 세션은 워커가 heartbeat 409("cancelled") 를
+받으면 codex 를 죽인다(워커 ≥ 이 커밋; 라이브 워커는 sudo cp 대기). 스모크 73 checks.
+
 ## 남은 것
 
 - detect·link 의 **실제 프롬프트**는 PaperMeister G 단계에서 온다. 여기서 쓴 detect 프롬프트는 e2e 용이며 저장소에 두지 않았다.

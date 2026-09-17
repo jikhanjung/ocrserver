@@ -113,6 +113,16 @@ class Heartbeat(threading.Thread):
                 api("POST", f"/internal/figures/items/{self.item_id}/heartbeat", timeout=15)
             except Exception as e:
                 log(f"heartbeat failed: {e}")
+                if "cancelled" in str(e):
+                    # client cancelled the job: stop paying for this session
+                    p = _current_proc
+                    if p is not None and p.poll() is None:
+                        log("  item cancelled by client — killing codex session")
+                        try:
+                            os.killpg(p.pid, signal.SIGKILL)
+                        except OSError:
+                            pass
+                    return
 
     def stop(self):
         self._ev.set()

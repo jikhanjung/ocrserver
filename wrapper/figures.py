@@ -31,7 +31,7 @@ from fastapi.responses import HTMLResponse, Response
 router = APIRouter()
 
 KINDS = ("detect", "link", "panels")
-ITEM_TERMINAL = ("done", "failed", "budget_exhausted")
+ITEM_TERMINAL = ("done", "failed", "budget_exhausted", "cancelled")
 
 WORKER_TOKEN = os.getenv("FIGURES_WORKER_TOKEN", "")
 MIN_INTERVAL = int(os.getenv("FIGURES_MIN_INTERVAL", "300"))
@@ -293,11 +293,14 @@ async def _refresh_job_status(job_id: str) -> None:
     counts = await _job_counts(job_id)
     total = sum(counts.values())
     done = counts.get("done", 0)
-    failed = counts.get("failed", 0) + counts.get("budget_exhausted", 0)
+    cancelled = counts.get("cancelled", 0)
+    failed = counts.get("failed", 0) + counts.get("budget_exhausted", 0) + cancelled
     pending = counts.get("queued", 0) + counts.get("processing", 0)
     if pending:
         status = "processing" if (done or failed or counts.get("processing")) else "queued"
         completed_at = None
+    elif cancelled == total:
+        status, completed_at = "cancelled", time.time()
     elif failed and not done:
         status, completed_at = "failed", time.time()
     elif failed:
@@ -582,6 +585,25 @@ async def resume_job(kind: str, job_id: str, retry_errors: bool = Query(False)):
     await _refresh_job_status(job_id)
     await db.commit()
     return {"job_id": job_id, "requeued": cur.rowcount}
+
+
+@router.post("/figures/{kind}/{job_id}/cancel")
+async def cancel_job(kind: str, job_id: str):
+    """Drop a job's queued items (status → cancelled). An item already running
+    keeps running: the worker's next heartbeat gets 409 and it aborts the
+    session on its own (figures_worker ≥ 0.3.5); until then it finishes and
+    its result is discarded (409 on result too)."""
+    job = await _job_public(job_id, with_items=False)
+    if not job or job["kind"] != kind:
+        raise HTTPException(status_code=404, detail="job not found")
+    db = _db()
+    now = time.time()
+    cur = await db.execute(
+        "UPDATE figure_items SET status='cancelled', error='cancelled by client', completed_at=?, claimed_by=NULL "
+        "WHERE job_id=? AND status IN ('queued','processing')", (now, job_id))
+    await _refresh_job_status(job_id)
+    await db.commit()
+    return {"job_id": job_id, "cancelled": cur.rowcount, "status": (await _job_public(job_id, with_items=False))["status"]}
 
 
 @router.post("/figures/worker/resume")
@@ -870,7 +892,10 @@ async def item_heartbeat(item_id: str, x_worker_token: str | None = Header(None)
     await db.execute("UPDATE figure_worker SET last_seen=?, state='running' WHERE id=1", (now,))
     await db.commit()
     if not cur.rowcount:
-        raise HTTPException(status_code=409, detail="item is not processing (requeued or finished)")
+        async with db.execute("SELECT status FROM figure_items WHERE item_id=?", (item_id,)) as c:
+            row = await c.fetchone()
+        st = row[0] if row else "missing"
+        raise HTTPException(status_code=409, detail=f"item is {st}, not processing" + (" — cancelled, abort the session" if st == "cancelled" else ""))
     return {"ok": True}
 
 

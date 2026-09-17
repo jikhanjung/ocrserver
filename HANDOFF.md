@@ -32,13 +32,13 @@
 >   (「곧 해야 할 작업」).
 > - ⚠️ **배포 규칙** (유지): wrapper/llmwrapper 재생성은 `up -d --no-deps`.
 >   `nginx.conf` 를 **에디터/`mv` 로 교체하지 말 것** (inode 고정). `cp` OK.
-> - **도판 분할 (devlog 046·047)**: wrapper **0.3.4** (0.3.2 detect `hint_boxes[]` · 0.3.3 `release` · 0.3.4 **큐 페이지 `/figures`** + `/api/figures/items`) — `/pdfs`, `/figures/*`, `/api/figures`, `/internal/figures/*`.
+> - **도판 분할 (devlog 046·047)**: wrapper **0.3.5** (0.3.2 detect `hint_boxes[]` · 0.3.3 `release` · 0.3.4 **큐 페이지 `/figures`** · 0.3.5 `POST /figures/{kind}/{job}/cancel`) — `/pdfs`, `/figures/*`, `/api/figures`, `/internal/figures/*`.
 >   호스트 워커 `scripts/figures_worker.py` 는 **systemd 유닛 `ocrserver-figures-worker` 로 09-17 00:06 UTC 부터 가동**
 >   (User=jikhanjung, 인터프리터 `~/venv/ocrserver/bin/python3` — 시스템 python3 엔 fitz 없음). e2e(panels 70 s · detect 95 s) +
 >   panels 파일럿 6/6 통과. 워커 상태는 `/status` 카드·`GET /api/figures`·`journalctl -u ocrserver-figures-worker -f`.
 >   `.env`: `FIGURES_WORKER_TOKEN`, `FIGURES_MIN_INTERVAL=300`. nginx `/internal/` 은 loopback+172.18/16 만.
 >   OCR 경로 무변 (회귀 15/15). 스모크 56 checks. e2e 산출물은 `/srv/ocrserver/figure_ws/510ea212…/`(3.6MB, 7일 TTL).
-> - 이미지: `ocrwrapper:0.3.4`, `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
+> - 이미지: `ocrwrapper:0.3.5`, `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
 
 > **(이전 박스, 2026-09-08 — nginx upstream resolve, devlog 043)**
 > - chandra-b 정지 후 wrapper 재생성 → wrapper 가 chandra-b 의 옛 IP
@@ -884,6 +884,11 @@ llm          vllm/vllm-openai:latest       Exited
   로 진행 확인. `budget_exhausted` 가 나오면 그 편의 쪽수·`run/aN/events.jsonl` 을 보고 상한 또는 지시문 조정.
 - ✅ **워커 수정본 설치됨 (08:09 UTC)** — 재연결 알림 오판·stall 감시(`FIGURES_IDLE_TIMEOUT` 900 s)·재시작 시 간격 유지.
   stall 로 상한 초과됐던 잡 `62e3bf3b` 는 resume 되어 2차 시도 중. 다음 재시작부터는 `figure_ws/.next_call_at` 로 간격이 유지된다.
+- **큰 논문은 클라이언트가 분할** (PaperMeister `672de8a`): 도판 40개 초과면 `figures[]` 를 쪽 순서로 나눠 같은 잡의 항목 여럿으로
+  (`…#i/n`, `part`). 109쪽·도판 91 논문(`a95486d6`) 은 3차도 3600 s 상한(재연결 6회) → 클라이언트가 3항목으로 재제출 예정.
+  291쪽·도판 121 잡 `2385bb6a` 는 요청대로 **cancel** 했다(0.3.5 신설). 218쪽 잡 `3829611f` 는 취소 전에 이미 `failed`.
+- **워커 스크립트 라이브 갱신 대기 (sudo cp)**: 코드 기본 idle 1800 s + **취소된 항목의 heartbeat 409 를 받으면 세션 kill**. 지금 라이브
+  워커는 취소돼도 세션을 끝까지 돈다(결과만 버려짐).
 - **idle 감시 1800 s** (09:47, `.env` + 코드 기본값): 900 s 는 긴 논문의 최종 JSON 생성 구간을 stall 로 오판했다(devlog 047).
   109쪽·도판 91 논문 `a95486d6` 이 3차(마지막) 시도 중 — 또 실패하면 `POST /figures/link/<job>/resume?retry_errors=true`.
 - **큐 페이지**: `http://<host>:8080/figures` — 워커 상태·진행/대기·편당 평균·남은 시간·항목 표(30 s 갱신). `/status` 카드에서 링크.

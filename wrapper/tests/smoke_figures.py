@@ -214,6 +214,25 @@ with TestClient(main.app) as c:
     ok(r.json()["state"] == "sleeping", "worker status")
     f = c.get("/api/figures").json()
     ok(f["calls_24h"]["total"] >= 8 and f["items"]["panels"]["done"] >= 5 and f["worker"]["alive"], f"summary {json.dumps(f)[:300]}")
+    # cancel: queued items dropped, running item aborted via heartbeat 409
+    r = c.post("/figures/panels", json={**base, "client_id": "pm-cancel", "items": items})
+    cj = r.json()["job_id"]
+    it_c = None
+    for _ in range(12):  # fair share may hand out other clients' queued items first
+        x = c.post("/internal/figures/claim", json={"worker_id": "w1"}, headers=W).json()["item"]
+        ok(x is not None, "claim while cancel job pending")
+        if x["job_id"] == cj:
+            it_c = x; break
+        c.post(f"/internal/figures/items/{x['item_id']}/result", headers=W, json={"status": "done", "result": {"x": 1}, "elapsed_s": 1})
+    ok(it_c is not None, "claimed an item of the to-be-cancelled job")
+    r = c.post(f"/figures/panels/{cj}/cancel")
+    ok(r.status_code == 200 and r.json()["cancelled"] == 3 and r.json()["status"] == "cancelled", f"cancel {r.text}")
+    r = c.post(f"/internal/figures/items/{it_c['item_id']}/heartbeat", headers=W)
+    ok(r.status_code == 409 and "cancelled" in r.text, "heartbeat on cancelled item → 409 abort hint")
+    ok(c.post(f"/internal/figures/items/{it_c['item_id']}/result", headers=W, json={"status": "done", "result": {}}).status_code == 409, "late result rejected")
+    ok(c.post(f"/figures/panels/{cj}/cancel").json()["cancelled"] == 0, "cancel is idempotent")
+    ok(c.post("/figures/panels/nope/cancel").status_code == 404, "cancel unknown job 404")
+
     # queue page + item listing
     r = c.get("/figures")
     ok(r.status_code == 200 and "도판 분할 큐" in r.text and "/api/figures/items" in r.text, "queue page served")
