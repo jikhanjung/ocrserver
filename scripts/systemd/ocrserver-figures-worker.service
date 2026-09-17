@@ -1,7 +1,8 @@
 # /etc/systemd/system/ocrserver-figures-worker.service
 #
 # Host-side executor for the wrapper's figure-split jobs (wrapper 0.3.0+, devlog 046/047).
-# Runs as jikhanjung because the Codex CLI login (~/.codex) lives there; the PDF
+# Runs as jikhanjung because the Codex CLI login (~/.codex) and the venv with
+# PyMuPDF/Pillow/requests (~/venv/ocrserver) live there; /usr/bin/python3 has no fitz. The PDF
 # store is root-owned but world-readable, and the workspace dir is ours.
 #
 # Install (needs sudo):
@@ -28,7 +29,7 @@ Environment=PDF_DIR=/srv/ocrserver/data/pdfs
 Environment=FIGURES_WS_DIR=/srv/ocrserver/figure_ws
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/python3 /srv/ocrserver/scripts/figures_worker.py
+ExecStart=/home/jikhanjung/venv/ocrserver/bin/python3 /srv/ocrserver/scripts/figures_worker.py
 Restart=always
 RestartSec=30
 Nice=10
