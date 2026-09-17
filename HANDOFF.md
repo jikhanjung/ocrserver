@@ -1,4 +1,4 @@
-# HANDOFF — 2026-09-17 (도판 분할 실사용 시작: PaperMeister link 30편 큐 처리 중, link 상한 3600 s)
+# HANDOFF — 2026-09-17 08:10 UTC (도판 분할 실사용 중: link 30편 큐 19 완료 · 워커 수정본 가동)
 
 > **🟢 이 박스가 현재 상태의 전부다.**
 > - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 09-08
@@ -81,7 +81,14 @@
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-09-17 새벽 — 워커 systemd 가동, 파일럿·계약 테스트)
+## 방금 한 작업 (2026-09-17 아침 — 첫 실사용 7시간, 워커 버그 둘 수정)
+
+- PaperMeister H 가 link 30편을 넣음. 첫 편 46쪽 968 s → link 상한 3600 s·heartbeat 4200 s 로 (sleeping 창에서 무손실 적용).
+- 6시간 뒤 점검에서 버그 둘: `Reconnecting…` error 이벤트를 실패로 오판해 **유효한 답 두 개(각 47분) 폐기** → 1차 답을 내부 API 로
+  살림 · 웹소켓 stall 이 3600 s 상한을 통째로 소모 → stdout 스트리밍 + 900 s idle 감시. 가짜 codex 4 경로 검증, 사용자가 설치.
+- 클라이언트 쪽 관찰: 같은 논문이 같은 초에 link 잡 3개 (e5def301…), 긴 논문의 skipped 다수. devlog 047 에 기록.
+
+## 이전 작업 (2026-09-17 새벽 — 워커 systemd 가동, 파일럿·계약 테스트)
 
 - 사용자가 유닛 설치 → 시스템 python3 에 fitz 없어 크래시 루프 → 유닛 `ExecStart` 를 `~/venv/ocrserver/bin/python3` 로 (`0d4c6d1`) → 재설치, 가동 확인.
 - wrapper 0.3.2(detect 쪽 단위 `hint_boxes[]`) · 0.3.3(SIGTERM 시 `release` 즉시 재큐, 실측 4 s). Hub `0.3.3`+`latest`.
@@ -875,11 +882,11 @@ llm          vllm/vllm-openai:latest       Exited
 - ✅ **첫 실제 호출 (09-17 00:20 UTC)**: link 30편 큐. 첫 편 46쪽 968 s·24/24·항목 223 (devlog 047). → link 상한 **3600 s**,
   heartbeat **4200 s** 로 올림(`.env`, compose). 큐는 편당 5분 간격 + 세션이라 **몇 시간** 돈다 — `/status` 카드·`GET /api/figures`
   로 진행 확인. `budget_exhausted` 가 나오면 그 편의 쪽수·`run/aN/events.jsonl` 을 보고 상한 또는 지시문 조정.
-- 🔴 **워커 수정본 설치 대기 (sudo)** — 08:00 UTC 실사용에서 잡은 버그 둘(재연결 알림 오판으로 유효한 답 폐기 · 스트림 stall 이
-  상한 3600 s 를 태움) 고침 + 재시작 시 간격 유지. 커밋됨, 라이브 `/srv/ocrserver/scripts/figures_worker.py` 는 **아직 옛것**:
-  `sudo cp /home/jikhanjung/projects/ocrserver/scripts/figures_worker.py /srv/ocrserver/scripts/` → `/status` 가 sleeping 일 때
-  `kill -TERM $(systemctl show ocrserver-figures-worker -p MainPID --value)`. 그 뒤 stall 로 `budget_exhausted` 된 잡 `62e3bf3b`
-  를 `curl -X POST localhost:8080/figures/link/62e3bf3b-…/resume` 로 재큐.
+- ✅ **워커 수정본 설치됨 (08:09 UTC)** — 재연결 알림 오판·stall 감시(`FIGURES_IDLE_TIMEOUT` 900 s)·재시작 시 간격 유지.
+  stall 로 상한 초과됐던 잡 `62e3bf3b` 는 resume 되어 2차 시도 중. 다음 재시작부터는 `figure_ws/.next_call_at` 로 간격이 유지된다.
+- **큐 관찰 (08:10)**: link 완료 19 · 처리 1 · 대기 11(≈930쪽, 최대 291쪽), 편당 평균 642 s → ≈ 3 h. 긴 논문의 `skipped` 가 많다
+  (116쪽: 도판 4 / skipped 44 · 231쪽: skipped 49) — 실패는 아니고 클라이언트 검증 단계의 숫자. 끝나면 `budget_exhausted`·
+  `failed` 유무와 재연결 횟수(워커 로그 "reconnected Nx") 를 한 번 훑을 것.
 - PaperMeister 에 전달: 같은 논문(e5def301…, 78쪽)이 같은 초에 link 잡 3개로 들어옴 — 레인의 중복 제출 확인.
 - **워커 스크립트 갱신 절차**: dev 트리 수정 → `sudo cp scripts/figures_worker.py /srv/ocrserver/scripts/` → 재시작. 재시작은
   sudo 없이도 됨: `kill -TERM $(systemctl show ocrserver-figures-worker -p MainPID --value)` → release + systemd 가 30 s 안에 재기동.
