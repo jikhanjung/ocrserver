@@ -1,4 +1,4 @@
-# HANDOFF — 2026-09-16 (도판 분할: wrapper 0.3.1 + 호스트 워커 e2e 통과, devlog 046·047 — 유닛 설치는 sudo 대기)
+# HANDOFF — 2026-09-17 (도판 분할 서버 상시 운영 시작: wrapper 0.3.3 + 워커 systemd 가동, devlog 046·047)
 
 > **🟢 이 박스가 현재 상태의 전부다.**
 > - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 09-08
@@ -33,8 +33,9 @@
 > - ⚠️ **배포 규칙** (유지): wrapper/llmwrapper 재생성은 `up -d --no-deps`.
 >   `nginx.conf` 를 **에디터/`mv` 로 교체하지 말 것** (inode 고정). `cp` OK.
 > - **도판 분할 (devlog 046·047)**: wrapper **0.3.3** (0.3.2: detect 항목 쪽 단위 `hint_boxes[]` · 0.3.3: 종료 시 `release` 로 즉시 재큐) — `/pdfs`, `/figures/*`, `/api/figures`, `/internal/figures/*`.
->   호스트 워커 `scripts/figures_worker.py` 는 **e2e 통과**(panels 70 s · detect 95 s, Astra 가 힌트 상자를 chandra 값 3‰ 안으로
->   보정) 했지만 **systemd 유닛은 아직 설치 안 됨 — sudo 4줄, devlog 047 §설치**. 설치 전엔 `/figures/*` 잡이 큐에만 쌓인다.
+>   호스트 워커 `scripts/figures_worker.py` 는 **systemd 유닛 `ocrserver-figures-worker` 로 09-17 00:06 UTC 부터 가동**
+>   (User=jikhanjung, 인터프리터 `~/venv/ocrserver/bin/python3` — 시스템 python3 엔 fitz 없음). e2e(panels 70 s · detect 95 s) +
+>   panels 파일럿 6/6 통과. 워커 상태는 `/status` 카드·`GET /api/figures`·`journalctl -u ocrserver-figures-worker -f`.
 >   `.env`: `FIGURES_WORKER_TOKEN`, `FIGURES_MIN_INTERVAL=300`. nginx `/internal/` 은 loopback+172.18/16 만.
 >   OCR 경로 무변 (회귀 15/15). 스모크 56 checks. e2e 산출물은 `/srv/ocrserver/figure_ws/510ea212…/`(3.6MB, 7일 TTL).
 > - 이미지: `ocrwrapper:0.3.3`, `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
@@ -80,7 +81,14 @@
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-09-16 밤 — 호스트 워커 + wrapper 0.3.1, devlog 047)
+## 방금 한 작업 (2026-09-17 새벽 — 워커 systemd 가동, 파일럿·계약 테스트)
+
+- 사용자가 유닛 설치 → 시스템 python3 에 fitz 없어 크래시 루프 → 유닛 `ExecStart` 를 `~/venv/ocrserver/bin/python3` 로 (`0d4c6d1`) → 재설치, 가동 확인.
+- wrapper 0.3.2(detect 쪽 단위 `hint_boxes[]`) · 0.3.3(SIGTERM 시 `release` 즉시 재큐, 실측 4 s). Hub `0.3.3`+`latest`.
+- PaperMeister G 수령: `docs/figure_server_spec_v2.md` + 프롬프트 3벌 → `wrapper/tests/contract_spec_v2.py` 27 checks, 서버 변경 없음.
+- panels 파일럿 6장(라이브 코퍼스, fsis 프롬프트) 6/6, 70–88 s/장. 크롭 시트는 Artifact 로 사용자에게.
+
+## 이전 작업 (2026-09-16 밤 — 호스트 워커 + wrapper 0.3.1, devlog 047)
 
 - `scripts/figures_worker.py` + `scripts/systemd/ocrserver-figures-worker.service`. claim → 작업 폴더/렌더 → `codex exec` →
   result. 치명/예산/실패 판정, heartbeat, 5분 간격, 폴더 TTL. 자세히 devlog 047 표.
@@ -863,9 +871,11 @@ llm          vllm/vllm-openai:latest       Exited
 
 **2026-09-16 추가:**
 
-- **PaperMeister 진행 대조 (09-16 밤)**: A·B·C·D′·D 완료, **E 진행 중**. 099 §4 의 detect 계약 변경(쪽 단위 항목 + `hint_boxes[]`
-  + 쪽 의심 자리표시 행 + verdict `merge`)은 서버 0.3.2·워커에 반영됨. 서버가 더 기다리는 건 G 의 명세 v2·프롬프트 3벌.
-- **워커 유닛 설치 (sudo, 사용자)** — devlog 047 §설치 4줄. 그 뒤 `/status` 카드가 "대기 (idle)", `journalctl -u ocrserver-figures-worker -f`.
+- ~~PaperMeister 진행 대조 / 워커 유닛 설치~~ → 둘 다 끝. G 까지 수령(명세 v2·프롬프트 3벌, 계약 테스트 27 checks), 유닛 가동 중.
+- **첫 실제 호출 (PaperMeister H 이후)**: 첫 link·detect 잡이 들어오면 `journalctl -u ocrserver-figures-worker -f` 와 `/status` 카드로
+  세션 시간·`pages_consulted`·usage 를 본다. link 세션이 20분 상한에 걸리면(`budget_exhausted`) 상한 또는 지시문 조정.
+- **워커 스크립트 갱신 절차**: dev 트리 수정 → `sudo cp scripts/figures_worker.py /srv/ocrserver/scripts/` → `sudo systemctl restart
+  ocrserver-figures-worker` (0.3.3 부터 처리 중이어도 release 로 즉시 재큐라 아무 때나 됨). 유닛 파일이 바뀌면 `daemon-reload` 도.
 - ~~워커 재시작 규칙~~ → 0.3.3 부터 SIGTERM 시 항목을 즉시 release (시도 환불). 아무 때나 재시작해도 된다.
 - ✅ **PaperMeister G 완료 (09-16 밤, PaperMeister `a77bd64`)** — `docs/figure_server_spec_v2.md`(항목 내용·응답 스키마, **wrapper 0.3.2 전송 형식에 맞춤**: `items[].key` · link는 논문당 항목 하나 · detect 항목은
   `page`+`hint_boxes`+`figure_keys` 옆에 모델용 `figures[]`·`reasons`·`hints`) + `papermeister/figure_prompts/`(detect·link·panels `.md`+`.schema.json`, 요청에 실려 오므로 복사 불필요;
