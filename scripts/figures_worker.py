@@ -325,11 +325,20 @@ def _run_stream(cmd, cwd, timeout, idle_timeout, stdin, out_path, err_path):
                 pass
             start = last = time.monotonic(); last_size = 0
             timed_out = stalled = False
+            tail = b""
             while p.poll() is None:
                 size = os.path.getsize(out_path)
                 now = time.monotonic()
                 if size != last_size:
-                    last_size, last = size, now
+                    # Only non-error events count as progress: a session stuck in a
+                    # reconnect loop keeps printing {"type":"error",...} lines forever
+                    # and must still trip the idle watchdog (2026-09-17 13:25).
+                    with open(out_path, "rb") as fr:
+                        fr.seek(last_size); chunk = tail + fr.read(size - last_size)
+                    *whole, tail = chunk.split(b"\n")
+                    if any(_is_progress(l) for l in whole):
+                        last = now
+                    last_size = size
                 if now - start > timeout:
                     timed_out = True; break
                 if idle_timeout and now - last > idle_timeout:
@@ -340,6 +349,18 @@ def _run_stream(cmd, cwd, timeout, idle_timeout, stdin, out_path, err_path):
         finally:
             _current_proc = None
     return (None if (timed_out or stalled) else p.returncode), timed_out, stalled
+
+
+def _is_progress(line: bytes) -> bool:
+    line = line.strip()
+    if not line:
+        return False
+    try:
+        e = json.loads(line)
+    except Exception:
+        return True
+    t = e.get("type"); it = e.get("item") or {}
+    return not (t == "error" or it.get("type") == "error")
 
 
 def _strip_noise(s: str) -> str:
