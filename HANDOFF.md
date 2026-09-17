@@ -885,7 +885,7 @@ llm          vllm/vllm-openai:latest       Exited
 - ✅ **워커 수정본 설치됨 (08:09 UTC)** — 재연결 알림 오판·stall 감시(`FIGURES_IDLE_TIMEOUT` 900 s)·재시작 시 간격 유지.
   stall 로 상한 초과됐던 잡 `62e3bf3b` 는 resume 되어 2차 시도 중. 다음 재시작부터는 `figure_ws/.next_call_at` 로 간격이 유지된다.
 - **큐 페이지**: `http://<host>:8080/figures` — 워커 상태·진행/대기·편당 평균·남은 시간·항목 표(30 s 갱신). `/status` 카드에서 링크.
-- **큐 관찰 (08:21 UTC)**: . 이후는 `/figures` 페이지에서. 긴 논문의 `skipped` 가 많다(116쪽: 도판 4 / skipped 44 ·
+- **큐 관찰 (08:21 UTC)**: link 완료 20 · 처리 1 · 대기 10(823쪽) · 실패/상한 0 · 24h 평균 link 628 s · 워커 running. 이후는 `/figures` 페이지에서. 긴 논문의 `skipped` 가 많다(116쪽: 도판 4 / skipped 44 ·
   231쪽: 49) — 실패는 아니고 클라이언트 검증 단계의 숫자. 큐가 끝나면 `failed`·`budget_exhausted` 유무와 워커 로그의
   "reconnected Nx" 를 한 번 훑을 것.
 - ~~PaperMeister 에 전달: 같은 논문 3중 제출~~ → 클라이언트가 고침(`acacde5`: Zotero 부모 셋에 걸린 PDF 라 PaperFile 행 셋 → 해시당 1회 제출 + 형제 행에 전파). 서버 dedup 은 그대로.
