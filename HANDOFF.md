@@ -1,4 +1,4 @@
-# HANDOFF — 2026-09-17 08:21 UTC (도판 분할 실사용 중 · wrapper 0.3.4 큐 페이지 /figures · 워커 수정본 가동)
+# HANDOFF — 2026-09-17 23:00 UTC (첫 실사용 link 30편 큐 완주 · wrapper 0.3.5 · 워커 수정본 가동)
 
 > **🟢 이 박스가 현재 상태의 전부다.**
 > - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 09-08
@@ -893,9 +893,13 @@ llm          vllm/vllm-openai:latest       Exited
 - **idle 감시 1800 s** (09:47, `.env` + 코드 기본값): 900 s 는 긴 논문의 최종 JSON 생성 구간을 stall 로 오판했다(devlog 047).
   109쪽·도판 91 논문 `a95486d6` 이 3차(마지막) 시도 중 — 또 실패하면 `POST /figures/link/<job>/resume?retry_errors=true`.
 - **큐 페이지**: `http://<host>:8080/figures` — 워커 상태·진행/대기·편당 평균·남은 시간·항목 표(30 s 갱신). `/status` 카드에서 링크.
-- **큐 관찰 (08:21 UTC)**: link 완료 20 · 처리 1 · 대기 10(823쪽) · 실패/상한 0 · 24h 평균 link 628 s · 워커 running. 이후는 `/figures` 페이지에서. 긴 논문의 `skipped` 가 많다(116쪽: 도판 4 / skipped 44 ·
-  231쪽: 49) — 실패는 아니고 클라이언트 검증 단계의 숫자. 큐가 끝나면 `failed`·`budget_exhausted` 유무와 워커 로그의
-  "reconnected Nx" 를 한 번 훑을 것.
+- ✅ **link 큐 완주 (18:49 UTC)**: PaperMeister 27편 → done 항목 36, 도판 요청 707 → 답 542, 항목 3,898, skipped 165.
+  세션 합 7.4 h, 입력 12.6M 토큰(대부분 캐시), 출력 546k. 실패 0. `budget_exhausted` 3 중 2 는 분할 전 단일 항목(218쪽·109쪽,
+  분할판이 완주해 대체됨), **남은 구멍 하나: 291쪽 논문(7450) 1/4(도판 40)** — 두 번 다 재연결 뒤 3600 s 상한. 같은 논문의
+  2/4·3/4(각 40) 는 21·27분에 40/40 완료. 시도 2 라 `resume` 한 번 남았지만, 이 묶음만 두 번 막힌 걸 보면 클라이언트가 20개씩
+  둘로 다시 내는 편이 낫다. 큐 페이지: `/figures`.
+- **분할 결과 (40개 묶음)**: 218쪽 38/40+25/25 · 109쪽 39/40+39/40+11/11 · 291쪽 40/40+40/40+1/1. 40개는 망이 버티면 충분하고,
+  skipped 도 묶음당 0–2 로 단일 항목 시절(31·44·49)보다 훨씬 낫다. 세션 13–29분.
 - ~~PaperMeister 에 전달: 같은 논문 3중 제출~~ → 클라이언트가 고침(`acacde5`: Zotero 부모 셋에 걸린 PDF 라 PaperFile 행 셋 → 해시당 1회 제출 + 형제 행에 전파). 서버 dedup 은 그대로.
 - **워커 스크립트 갱신 절차**: dev 트리 수정 → `sudo cp scripts/figures_worker.py /srv/ocrserver/scripts/` → 재시작. 재시작은
   sudo 없이도 됨: `kill -TERM $(systemctl show ocrserver-figures-worker -p MainPID --value)` → release + systemd 가 30 s 안에 재기동.
