@@ -103,6 +103,25 @@ systemd `Restart=always` 가 30 s 안에 새 `.env` 로 재기동). 항목 손�
 관찰: 재시작한 워커는 남은 5분 간격을 건너뛰고 바로 claim 했다 — 간격이 프로세스 메모리에만 있다. 서버가 claim 응답에 주는
 `worker.next_call_at` 을 기동 시 존중하면 된다(다음 워커 수정 때).
 
+## 추가 — 6시간 실사용에서 나온 워커 버그 둘 (2026-09-17 08:00 UTC)
+
+link 30편 큐를 7시간 돌린 뒤: done 18 · budget_exhausted 1 · 대기 12. 문제 둘.
+
+1. **재연결 알림을 실패로 오판.** 110쪽 논문 두 시도(각 47분)가 exit 0·`turn.completed`·유효한 답(도판 6, 항목 263/269)이었는데,
+   중간의 `{"type":"error","message":"Reconnecting... 2/5 (idle timeout waiting for websocket)"}` 이벤트를 워커가 실패 사유로 세어
+   `failed` → 재큐 → 3차 시도 중이었다. **답 두 개(94분·43만 토큰) 를 버린 것.** 1차 답을 내부 API `result` 로 직접 올려 살렸다.
+   고침: `turn.failed` 만 실패. `error` 는 "reconnect" 문구면 무시(횟수만 기록), 그 외 `error` 도 `turn.completed` 가 있으면 무시.
+2. **스트림 멈춤이 세션 상한(3600 s)을 통째로 태움.** 78쪽 논문 한 시도는 명령 2개 뒤 stdout 이 멈춘 채 3600 s 를 채워
+   `budget_exhausted`. 같은 논문의 다른 시도는 6분. 이 망의 웹소켓 stall 이고 모델 탓이 아니다.
+   고침: stdout 을 파일로 스트리밍하며 **`FIGURES_IDLE_TIMEOUT=900` s 동안 새 출력이 없으면 kill → `failed`(재시도 가능)**.
+   하드 상한은 그대로 `budget_exhausted`.
+
+덤: 재시작 시 남은 간격을 `figure_ws/.next_call_at` 로 기억해 건너뛰지 않게 했다. 가짜 codex 로 4 경로(재연결→done · stall→failed 6 s ·
+상한→budget · turn.failed→failed) 검증.
+
+또 하나 관찰: 같은 78쪽 논문이 같은 초에 **세 잡**으로 들어왔다(항목 내용이 달라 dedup 안 걸림). 클라이언트 레인 쪽 중복 제출로
+보이며 서버 문제는 아니다 — PaperMeister 에 전달.
+
 ## 남은 것
 
 - detect·link 의 **실제 프롬프트**는 PaperMeister G 단계에서 온다. 여기서 쓴 detect 프롬프트는 e2e 용이며 저장소에 두지 않았다.

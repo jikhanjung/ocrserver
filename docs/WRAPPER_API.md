@@ -510,6 +510,8 @@ detect·link 의 지시문은 "필요하면 앞뒤 쪽을 열고 `text/all.txt` 
 - 한 번에 한 항목, 호출 사이 `min_interval_s`(서버가 claim 응답으로 알려줌) 대기. 빈 큐면 30 s 마다 claim.
 - 세션 상한: detect 600 s · link 1200 s · panels 600 s (`FIGURES_SESSION_TIMEOUT_*`; 라이브 `.env` 는 link 3600). 넘으면 프로세스 그룹 kill →
   `budget_exhausted`. 첫 실제 link(46쪽)가 968 s 였다(devlog 047).
+- **stall 감시**: codex stdout 이 `FIGURES_IDLE_TIMEOUT`(기본 900 s) 동안 늘지 않으면 kill → `failed`(재시도). 스트림의
+  `Reconnecting…` 알림은 실패가 아니다(턴이 완료되면 `done`).
 - 치명(`login required`·`Codex CLI not found`·`usage limit`·`rate limit`) 은 호출 전 `codex login status` 와 호출 후
   stdout+stderr 에서 찾는다. stderr 의 `failed to refresh available models`·`backend-api/ps/mcp` 는 이 망의 상시 노이즈라 제외.
 - 결과 검증: 워커가 `prompt.schema` 로 type/required/properties/items/enum 만 검사(호스트에 jsonschema 없음). 위반이면 `failed`.

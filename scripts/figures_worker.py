@@ -62,6 +62,10 @@ PAGE_DPI = int(os.getenv("FIGURES_PAGE_DPI", "100"))
 TARGET_DPI = int(os.getenv("FIGURES_TARGET_DPI", "150"))
 MAX_LONG_PX = int(os.getenv("FIGURES_MAX_LONG_PX", "4000"))
 WS_TTL_DAYS = int(os.getenv("FIGURES_WORKSPACE_TTL_DAYS", "7"))
+# No new stdout from codex for this long → the stream is hung (KOPRI network websocket
+# stalls seen 2026-09-17), kill and retry instead of burning the whole session cap.
+IDLE_TIMEOUT = int(os.getenv("FIGURES_IDLE_TIMEOUT", "900"))
+NEXT_CALL_FILE = os.path.join(WS_DIR, ".next_call_at")
 WORKER_ID = os.getenv("FIGURES_WORKER_ID", socket.gethostname())
 DEFAULT_MODEL = "gpt-6-astra"
 
@@ -295,6 +299,39 @@ def _run(cmd, cwd, timeout, stdin=None, track=False):
     return p.returncode, out, err
 
 
+def _run_stream(cmd, cwd, timeout, idle_timeout, stdin, out_path, err_path):
+    """Run codex with stdout/stderr streamed to files so a hung stream is
+    visible: no growth of stdout for idle_timeout → stalled. Returns
+    (returncode|None, timed_out, stalled)."""
+    global _current_proc
+    with open(out_path, "wb") as fo, open(err_path, "wb") as fe:
+        p = subprocess.Popen(cmd, cwd=cwd, env=_clean_env(), stdin=subprocess.PIPE,
+                             stdout=fo, stderr=fe, start_new_session=True)
+        _current_proc = p
+        try:
+            try:
+                p.stdin.write(stdin.encode()); p.stdin.close()
+            except BrokenPipeError:
+                pass
+            start = last = time.monotonic(); last_size = 0
+            timed_out = stalled = False
+            while p.poll() is None:
+                size = os.path.getsize(out_path)
+                now = time.monotonic()
+                if size != last_size:
+                    last_size, last = size, now
+                if now - start > timeout:
+                    timed_out = True; break
+                if idle_timeout and now - last > idle_timeout:
+                    stalled = True; break
+                time.sleep(2)
+            if p.poll() is None:
+                os.killpg(p.pid, signal.SIGKILL); p.wait()
+        finally:
+            _current_proc = None
+    return (None if (timed_out or stalled) else p.returncode), timed_out, stalled
+
+
 def _strip_noise(s: str) -> str:
     return "\n".join(l for l in (s or "").splitlines() if not any(n in l.lower() for n in NOISE))
 
@@ -335,15 +372,14 @@ def run_codex(cwd: str, prompt: str, schema: dict, images: list, model: str, eff
         cmd += ["--image", im]
     cmd += ["--output-schema", schema_path, "--output-last-message", resp_path, "--json", "-"]
     t0 = time.monotonic()
-    code, out, err = _run(cmd, cwd, timeout, stdin=prompt, track=True)
+    out_path = os.path.join(run_dir, "events.jsonl"); err_path = os.path.join(run_dir, "stderr.log")
+    code, timed_out, stalled = _run_stream(cmd, cwd, timeout, IDLE_TIMEOUT, prompt, out_path, err_path)
     elapsed = round(time.monotonic() - t0, 1)
+    out = open(out_path, encoding="utf-8", errors="replace").read()
+    err = open(err_path, encoding="utf-8", errors="replace").read()
     if _stop:
         return {"aborted": True, "elapsed": elapsed, "usage": {}, "code": code, "turn_ok": False,
-                "turn_err": [], "response": None, "stdout": out or "", "stderr": err or "", "command": cmd}
-    with open(os.path.join(run_dir, "events.jsonl"), "w") as f:
-        f.write(out or "")
-    with open(os.path.join(run_dir, "stderr.log"), "w") as f:
-        f.write(err or "")
+                "turn_err": [], "response": None, "stdout": out, "stderr": err, "command": cmd}
     events = []
     for line in (out or "").splitlines():
         try:
@@ -357,7 +393,17 @@ def run_codex(cwd: str, prompt: str, schema: dict, images: list, model: str, eff
                 if isinstance(v, (int, float)):
                     usage[k] = usage.get(k, 0) + v
     turn_ok = any(e.get("type") == "turn.completed" for e in events)
-    turn_err = [e for e in events if e.get("type") in ("turn.failed", "error")]
+    # `error` events also carry transient stream notices ("Reconnecting... 2/5 …") after
+    # which the turn still completes — those are not failures (2026-09-17: two valid
+    # 47-min answers were discarded for this). Only turn.failed, or errors with no
+    # completed turn, count.
+    turn_err = [e for e in events if e.get("type") == "turn.failed"]
+    reconnects = [e.get("message", "") for e in events
+                  if e.get("type") == "error" and "reconnect" in e.get("message", "").lower()]
+    other_errors = [e for e in events if e.get("type") == "error" and e not in reconnects
+                    and "reconnect" not in e.get("message", "").lower()]
+    if other_errors and not turn_ok:
+        turn_err += other_errors
     response = None
     if os.path.exists(resp_path):
         try:
@@ -366,8 +412,10 @@ def run_codex(cwd: str, prompt: str, schema: dict, images: list, model: str, eff
         except Exception:
             response = None
     info = {"code": code, "elapsed": elapsed, "usage": usage, "turn_ok": turn_ok,
-            "turn_err": turn_err[:3], "response": response, "stdout": out or "", "stderr": err or "",
-            "command": cmd}
+            "turn_err": turn_err[:3], "reconnects": len(reconnects), "timed_out": timed_out,
+            "stalled": stalled, "response": response, "stdout": out, "stderr": err, "command": cmd}
+    if reconnects:
+        log(f"  codex stream reconnected {len(reconnects)}x during the session")
     with open(os.path.join(run_dir, "run.json"), "w") as f:
         json.dump({k: v for k, v in info.items() if k not in ("stdout", "stderr", "response")},
                   f, ensure_ascii=False, indent=1, default=str)
@@ -486,7 +534,10 @@ def process(item: dict) -> dict:
     fr = fatal_reason(info["stdout"], info["stderr"])
     if fr:
         return {"status": "fatal", "error": f"codex: {fr} — {run_dir}", **base}
-    if info["code"] is None:
+    if info.get("stalled"):
+        return {"status": "failed",
+                "error": f"stalled: no codex output for {IDLE_TIMEOUT}s (stream hang) — {run_dir}", **base}
+    if info.get("timed_out") or info["code"] is None:
         return {"status": "budget_exhausted",
                 "error": f"session exceeded {SESSION_TIMEOUT[kind]}s — {run_dir}", **base}
     if info["code"]:
@@ -506,6 +557,12 @@ def process(item: dict) -> dict:
 
 def _sleep(seconds: float, state: str = "sleeping") -> None:
     set_status(state, next_call_at=time.time() + seconds)
+    if state == "sleeping":
+        try:
+            with open(NEXT_CALL_FILE, "w") as f:
+                f.write(str(time.time() + seconds))
+        except OSError:
+            pass
     end = time.monotonic() + seconds
     while not _stop and time.monotonic() < end:
         time.sleep(min(5, end - time.monotonic()))
@@ -532,6 +589,14 @@ def main() -> int:
     set_status("idle")
     sweep_workspaces()
     last_sweep = time.monotonic()
+    # A restart must not skip the pacing interval the previous process was in.
+    try:
+        remaining = float(open(NEXT_CALL_FILE).read()) - time.time()
+        if remaining > 0:
+            log(f"honouring previous interval: {int(remaining)}s left")
+            _sleep(min(remaining, 3600))
+    except (OSError, ValueError):
+        pass
     while not _stop:
         if time.monotonic() - last_sweep > 86400:
             sweep_workspaces(); last_sweep = time.monotonic()

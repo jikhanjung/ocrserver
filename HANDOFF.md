@@ -875,7 +875,12 @@ llm          vllm/vllm-openai:latest       Exited
 - ✅ **첫 실제 호출 (09-17 00:20 UTC)**: link 30편 큐. 첫 편 46쪽 968 s·24/24·항목 223 (devlog 047). → link 상한 **3600 s**,
   heartbeat **4200 s** 로 올림(`.env`, compose). 큐는 편당 5분 간격 + 세션이라 **몇 시간** 돈다 — `/status` 카드·`GET /api/figures`
   로 진행 확인. `budget_exhausted` 가 나오면 그 편의 쪽수·`run/aN/events.jsonl` 을 보고 상한 또는 지시문 조정.
-- **워커 수정 후보**: 기동 시 서버의 `worker.next_call_at` 존중(재시작하면 남은 간격을 건너뛴다). 급하지 않음.
+- 🔴 **워커 수정본 설치 대기 (sudo)** — 08:00 UTC 실사용에서 잡은 버그 둘(재연결 알림 오판으로 유효한 답 폐기 · 스트림 stall 이
+  상한 3600 s 를 태움) 고침 + 재시작 시 간격 유지. 커밋됨, 라이브 `/srv/ocrserver/scripts/figures_worker.py` 는 **아직 옛것**:
+  `sudo cp /home/jikhanjung/projects/ocrserver/scripts/figures_worker.py /srv/ocrserver/scripts/` → `/status` 가 sleeping 일 때
+  `kill -TERM $(systemctl show ocrserver-figures-worker -p MainPID --value)`. 그 뒤 stall 로 `budget_exhausted` 된 잡 `62e3bf3b`
+  를 `curl -X POST localhost:8080/figures/link/62e3bf3b-…/resume` 로 재큐.
+- PaperMeister 에 전달: 같은 논문(e5def301…, 78쪽)이 같은 초에 link 잡 3개로 들어옴 — 레인의 중복 제출 확인.
 - **워커 스크립트 갱신 절차**: dev 트리 수정 → `sudo cp scripts/figures_worker.py /srv/ocrserver/scripts/` → 재시작. 재시작은
   sudo 없이도 됨: `kill -TERM $(systemctl show ocrserver-figures-worker -p MainPID --value)` → release + systemd 가 30 s 안에 재기동.
   `.env` 변경도 같은 방법. 유닛 파일이 바뀌면 `sudo systemctl daemon-reload`. 큐가 돌 때는 `/status` 가 "간격 대기(sleeping)" 일 때.
