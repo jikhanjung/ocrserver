@@ -88,6 +88,21 @@ PaperMeister `a77bd64` 가 `docs/figure_server_spec_v2.md` + `papermeister/figur
 6/6 done, 실패 0, 도판당 70–88 s. 캡션의 하위 라벨 형식(괄호 소문자·대문자·숫자)을 그대로 읽었고 공유 범례를 패널로 안 세는 판단이
 프롬프트대로 나온다. 상자·크롭 시트는 Artifact 로 사용자에게 (세션 산출물). 워커 산출물 `/srv/ocrserver/figure_ws/<hash>/panels/…`.
 
+## 추가 — 첫 실제 호출 (2026-09-17 00:20 UTC, PaperMeister H) 와 상한 조정
+
+PaperMeister `papermeister-7355a25d` 가 link 잡 30편을 넣었다. 첫 편 Westergård(46쪽 펼침 스캔, 도판 24·플레이트 12):
+**968.6 s**, 입력 417k 토큰(캐시 346k) / 출력 26.8k, 24/24 도판·항목 223·skipped 0. Astra 는 `rg` 1회로 설명 쪽을 찾고 `cat` 3회로
+p33–45·p3·4·26·27 을 읽었다. 펼침 스캔의 마주보는 면 설명을 `facing_page` 로, 딧토(") 표기를 펼쳐 항목화, 파서의 `text_as_figure`
+의심 둘을 "지층 그림 맞음" 으로 되돌림. 두 번째 편(6쪽) 은 몇 분.
+
+**상한 조정**: 46쪽에 16분이면 100쪽 넘는 모노그래프는 1200 s 상한에 걸린다 → `.env` `FIGURES_SESSION_TIMEOUT_LINK=3600`,
+서버 `FIGURES_HEARTBEAT_TIMEOUT=4200`(compose 에 변수 추가, 세션 상한보다 길어야 재큐가 안 난다). 적용은 큐가 도는 중이라
+**항목 사이 `sleeping` 창**에서: wrapper `--no-deps --force-recreate`(3 s) + 워커에 SIGTERM(내 계정 프로세스라 sudo 불필요,
+systemd `Restart=always` 가 30 s 안에 새 `.env` 로 재기동). 항목 손실 0. 워커 재시작 후 `/proc/<pid>/environ` 으로 값 확인.
+
+관찰: 재시작한 워커는 남은 5분 간격을 건너뛰고 바로 claim 했다 — 간격이 프로세스 메모리에만 있다. 서버가 claim 응답에 주는
+`worker.next_call_at` 을 기동 시 존중하면 된다(다음 워커 수정 때).
+
 ## 남은 것
 
 - detect·link 의 **실제 프롬프트**는 PaperMeister G 단계에서 온다. 여기서 쓴 detect 프롬프트는 e2e 용이며 저장소에 두지 않았다.

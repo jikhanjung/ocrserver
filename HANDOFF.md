@@ -1,4 +1,4 @@
-# HANDOFF — 2026-09-17 (도판 분할 서버 상시 운영 시작: wrapper 0.3.3 + 워커 systemd 가동, devlog 046·047)
+# HANDOFF — 2026-09-17 (도판 분할 실사용 시작: PaperMeister link 30편 큐 처리 중, link 상한 3600 s)
 
 > **🟢 이 박스가 현재 상태의 전부다.**
 > - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 09-08
@@ -872,10 +872,13 @@ llm          vllm/vllm-openai:latest       Exited
 **2026-09-16 추가:**
 
 - ~~PaperMeister 진행 대조 / 워커 유닛 설치~~ → 둘 다 끝. G 까지 수령(명세 v2·프롬프트 3벌, 계약 테스트 27 checks), 유닛 가동 중.
-- **첫 실제 호출 (PaperMeister H 이후)**: 첫 link·detect 잡이 들어오면 `journalctl -u ocrserver-figures-worker -f` 와 `/status` 카드로
-  세션 시간·`pages_consulted`·usage 를 본다. link 세션이 20분 상한에 걸리면(`budget_exhausted`) 상한 또는 지시문 조정.
-- **워커 스크립트 갱신 절차**: dev 트리 수정 → `sudo cp scripts/figures_worker.py /srv/ocrserver/scripts/` → `sudo systemctl restart
-  ocrserver-figures-worker` (0.3.3 부터 처리 중이어도 release 로 즉시 재큐라 아무 때나 됨). 유닛 파일이 바뀌면 `daemon-reload` 도.
+- ✅ **첫 실제 호출 (09-17 00:20 UTC)**: link 30편 큐. 첫 편 46쪽 968 s·24/24·항목 223 (devlog 047). → link 상한 **3600 s**,
+  heartbeat **4200 s** 로 올림(`.env`, compose). 큐는 편당 5분 간격 + 세션이라 **몇 시간** 돈다 — `/status` 카드·`GET /api/figures`
+  로 진행 확인. `budget_exhausted` 가 나오면 그 편의 쪽수·`run/aN/events.jsonl` 을 보고 상한 또는 지시문 조정.
+- **워커 수정 후보**: 기동 시 서버의 `worker.next_call_at` 존중(재시작하면 남은 간격을 건너뛴다). 급하지 않음.
+- **워커 스크립트 갱신 절차**: dev 트리 수정 → `sudo cp scripts/figures_worker.py /srv/ocrserver/scripts/` → 재시작. 재시작은
+  sudo 없이도 됨: `kill -TERM $(systemctl show ocrserver-figures-worker -p MainPID --value)` → release + systemd 가 30 s 안에 재기동.
+  `.env` 변경도 같은 방법. 유닛 파일이 바뀌면 `sudo systemctl daemon-reload`. 큐가 돌 때는 `/status` 가 "간격 대기(sleeping)" 일 때.
 - ~~워커 재시작 규칙~~ → 0.3.3 부터 SIGTERM 시 항목을 즉시 release (시도 환불). 아무 때나 재시작해도 된다.
 - ✅ **PaperMeister G 완료 (09-16 밤, PaperMeister `a77bd64`)** — `docs/figure_server_spec_v2.md`(항목 내용·응답 스키마, **wrapper 0.3.2 전송 형식에 맞춤**: `items[].key` · link는 논문당 항목 하나 · detect 항목은
   `page`+`hint_boxes`+`figure_keys` 옆에 모델용 `figures[]`·`reasons`·`hints`) + `papermeister/figure_prompts/`(detect·link·panels `.md`+`.schema.json`, 요청에 실려 오므로 복사 불필요;

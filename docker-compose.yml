@@ -23,6 +23,7 @@ services:
       MODE_TOKEN: "${MODE_TOKEN:-}"
       FIGURES_WORKER_TOKEN: "${FIGURES_WORKER_TOKEN:-}"
       FIGURES_MIN_INTERVAL: "${FIGURES_MIN_INTERVAL:-300}"
+      FIGURES_HEARTBEAT_TIMEOUT: "${FIGURES_HEARTBEAT_TIMEOUT:-1800}"
     volumes:
       - ./data:/data
       - ./docker-compose.yml:/etc/ocrserver-compose.yml:ro
