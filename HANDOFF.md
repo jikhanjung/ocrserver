@@ -894,6 +894,10 @@ llm          vllm/vllm-openai:latest       Exited
   안 센다. 지금 라이브(12:12 설치본)는 재연결 루프에 빠진 세션이 3600 s 하드 상한까지 간다(그 전엔 60분 → 30분 차이).
 - **idle 감시 1800 s** (09:47, `.env` + 코드 기본값): 900 s 는 긴 논문의 최종 JSON 생성 구간을 stall 로 오판했다(devlog 047).
   109쪽·도판 91 논문 `a95486d6` 이 3차(마지막) 시도 중 — 또 실패하면 `POST /figures/link/<job>/resume?retry_errors=true`.
+- **09-18 03:30 UTC docker 자동 업그레이드 (docker-ce 29.8.0→29.8.1) 로 전 컨테이너 재시작** — 재부팅 아님. `restart: unless-stopped`
+  로 자동 복구, chandra-a·llm 모델 재로딩 ~3분 동안 OCR/LLM 502. 도판 워커는 항목 사이 대기 중이라 손실 0(figure 큐 그대로).
+  같은 사고 3번째(memory: unattended_upgrades_docker) — docker 패키지를 unattended-upgrades 에서 제외할지 결정 필요
+  (`/etc/apt/apt.conf.d/50unattended-upgrades` 의 `Package-Blacklist` 에 `docker-ce`·`docker-ce-cli`·`containerd.io`).
 - **큐 페이지**: `http://<host>:8080/figures` — 워커 상태·진행/대기·편당 평균·남은 시간·항목 표(30 s 갱신). `/status` 카드에서 링크.
 - ✅ **link 큐 완주 (18:49 UTC)**: PaperMeister 27편 → done 항목 36, 도판 요청 707 → 답 542, 항목 3,898, skipped 165.
   세션 합 7.4 h, 입력 12.6M 토큰(대부분 캐시), 출력 546k. 실패 0. `budget_exhausted` 3 중 2 는 분할 전 단일 항목(218쪽·109쪽,
