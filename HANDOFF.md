@@ -1,4 +1,4 @@
-# HANDOFF — 2026-09-17 23:00 UTC (첫 실사용 link 30편 큐 완주 · wrapper 0.3.5 · 워커 수정본 가동)
+# HANDOFF — 2026-09-18 06:00 UTC (link 27편 + detect 표본 27항목 완주 · wrapper 0.3.5 · 큐 비어 있음)
 
 > **🟢 이 박스가 현재 상태의 전부다.**
 > - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 09-08
@@ -908,7 +908,13 @@ llm          vllm/vllm-openai:latest       Exited
 - **PaperMeister 1차 거둠 평가 (09-18)**: 게이트 자동 신호 통과 — 반영 397 + 형제 복사 23, 거절 0, `description_not_printed` 0.
   검수 사유 대부분은 검사기 과민(키릴 오독 교정) 또는 detect 몫(파서가 사진별로 나눈 한 그림 → detect 트리거에 추가). 다음은
   **detect 표본 10건**(`detect_figures.py --limit 10`) — 서버의 첫 실제 detect. 대비해 `.env` `FIGURES_SESSION_TIMEOUT_DETECT=1200`
-  (기본 600). 워커 재시작(idle 창)으로 적용. detect 결과가 오면 `pages_consulted`·`from`/`dismiss` 모양과 세션 시간을 본다.
+  (기본 600). 워커 재시작(idle 창)으로 적용.
+- ✅ **detect 표본 완주 (09-18 02:26–05:37 UTC)**: 10편 27항목(쪽 단위) **27/27 done**, 실패·상한 0, 재연결 1건. 세션 72–454 s
+  평균 135 s(상한 1200 의 11%), 입력 1.6M 토큰. 힌트 상자 128 → 도판 29, dismiss 6. 유형별: OCR 이 못 잡은 플레이트 쪽 생성
+  (`plate_without_pictures` → Pl. 50), 사진 26·20·19·20장 플레이트 쪽 4개를 각각 하나로 병합(`图版 I` 등, 설명 쪽 찾음),
+  조각 19개 → 도판 10개(`caption_shared`), `dup_number` 는 펼침 스캔 중복 확인, 설명 글·장식 6건 dismiss. `from`/`dismiss`/
+  `pages_consulted` 전부 스키마대로. 서버 쪽에서 detect 는 link 보다 빠르고 안정적 — 다음은 클라이언트 반영(merge 등 verdict 도출)
+  과 병합된 도판의 link 재실행, 그리고 ③ panels.
 - **분할 결과 (40개 묶음)**: 218쪽 38/40+25/25 · 109쪽 39/40+39/40+11/11 · 291쪽 40/40+40/40+1/1. 40개는 망이 버티면 충분하고,
   skipped 도 묶음당 0–2 로 단일 항목 시절(31·44·49)보다 훨씬 낫다. 세션 13–29분.
 - ~~PaperMeister 에 전달: 같은 논문 3중 제출~~ → 클라이언트가 고침(`acacde5`: Zotero 부모 셋에 걸린 PDF 라 PaperFile 행 셋 → 해시당 1회 제출 + 형제 행에 전파). 서버 dedup 은 그대로.
