@@ -36,7 +36,7 @@
 >   호스트 워커 `scripts/figures_worker.py` 는 **systemd 유닛 `ocrserver-figures-worker` 로 09-17 00:06 UTC 부터 가동**
 >   (User=jikhanjung, 인터프리터 `~/venv/ocrserver/bin/python3` — 시스템 python3 엔 fitz 없음). e2e(panels 70 s · detect 95 s) +
 >   panels 파일럿 6/6 통과. 워커 상태는 `/status` 카드·`GET /api/figures`·`journalctl -u ocrserver-figures-worker -f`.
->   `.env`: `FIGURES_WORKER_TOKEN`, `FIGURES_MIN_INTERVAL=300`. nginx `/internal/` 은 loopback+172.18/16 만.
+>   `.env`: `FIGURES_WORKER_TOKEN`, `FIGURES_MIN_INTERVAL=120`(09-18, 처음 300). nginx `/internal/` 은 loopback+172.18/16 만.
 >   OCR 경로 무변 (회귀 15/15). 스모크 56 checks. e2e 산출물은 `/srv/ocrserver/figure_ws/510ea212…/`(3.6MB, 7일 TTL).
 > - 이미지: `ocrwrapper:0.3.5`, `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
 
@@ -909,6 +909,10 @@ llm          vllm/vllm-openai:latest       Exited
   검수 사유 대부분은 검사기 과민(키릴 오독 교정) 또는 detect 몫(파서가 사진별로 나눈 한 그림 → detect 트리거에 추가). 다음은
   **detect 표본 10건**(`detect_figures.py --limit 10`) — 서버의 첫 실제 detect. 대비해 `.env` `FIGURES_SESSION_TIMEOUT_DETECT=1200`
   (기본 600). 워커 재시작(idle 창)으로 적용.
+- **09-18 06:00 배치**: link 재연결 9항목(detect 로 병합된 도판, ①′→②) + **첫 실제 ③ panels 111항목**(3편, 클라이언트 `panels.md`).
+  간격이 지배해(111 × 5분 ≈ 12 h) 사용자 결정으로 **`FIGURES_MIN_INTERVAL=120`** (06:02, `.env` + wrapper 재생성; 워커는 claim
+  응답에서 읽으므로 재시작 불필요). 이틀간 100+ 호출에 한도·로그인 문제 0. panels 첫 결과가 오면 클라이언트 프롬프트로
+  `bbox_figure_1000`·`annotation_indices`·`non_compound_reason` 이 오는지, 세션 시간을 본다.
 - ✅ **detect 표본 완주 (09-18 02:26–05:37 UTC)**: 10편 27항목(쪽 단위) **27/27 done**, 실패·상한 0, 재연결 1건. 세션 72–454 s
   평균 135 s(상한 1200 의 11%), 입력 1.6M 토큰. 힌트 상자 128 → 도판 29, dismiss 6. 유형별: OCR 이 못 잡은 플레이트 쪽 생성
   (`plate_without_pictures` → Pl. 50), 사진 26·20·19·20장 플레이트 쪽 4개를 각각 하나로 병합(`图版 I` 등, 설명 쪽 찾음),
