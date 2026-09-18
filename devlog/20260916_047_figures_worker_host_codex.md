@@ -139,6 +139,23 @@ by server` 뒤 침묵 — 진짜 stall. **2차는 마지막 이벤트가 agent_m
 queued·processing 항목을 `cancelled` 로, 잡 롤업에 `cancelled` 추가, 처리 중이던 세션은 워커가 heartbeat 409("cancelled") 를
 받으면 codex 를 죽인다(워커 ≥ 이 커밋; 라이브 워커는 sudo cp 대기). 스모크 73 checks.
 
+## 추가 — 웹소켓 끊김의 정체와 HTTPS 전송 실험 (09-18 08:30–09:35 UTC)
+
+88 run 분석: stream error 는 link 25% · detect 3% · panels 0%. link 안에서 출력 토큰 0–5k 는 0건, 15k+ 는 5/18. 77 끊김 중 53 이
+`agent_message` 직후 — **읽기를 끝내고 긴 최종 JSON 을 생성하는 구간**. 메시지는 "websocket closed by server before
+response.completed" 36 · "idle timeout" 13 · decode error 13. chatgpt.com TLS 는 Google Trust Services 정품 → **KOPRI MITM 아님**,
+앞서 "이 망의 웹소켓 stall" 이라 쓴 것은 추측이었다(정정). 재연결은 답을 처음부터 다시 생성하므로 15–25분짜리 답이 반복 끊기면
+3600 s 를 채운다. (memory: project_codex_stream_disconnects)
+
+**HTTPS 실험**: codex 0.154 의 `features.responses_websockets*` 는 removed. 대신 `model_providers.<x>={base_url=chatgpt backend,
+requires_openai_auth=true, supports_websockets=false, stream_idle_timeout_ms=1800000, stream_max_retries=10}` 로 같은 ChatGPT 로그인을
+HTTPS(SSE) 로 쓸 수 있다(사소한 프롬프트로 확인: 웹소켓 connect 로그 없음). 231쪽·도판 40 항목을 이 설정으로 재생 →
+20분까지는 끊김 0, 그 뒤 "Transport error: error decoding response body" 로 **3번 끊겨 60분 타임아웃, 답 없음**. 웹소켓(7회)보다
+덜 끊기지만 완치가 아니다. **결론: 워커 전송은 바꾸지 않는다. 답 크기를 줄이는 것(클라이언트 분할)이 해법.**
+
+클라이언트 대응(PaperMeister `48e7047`): 분할 기준을 도판 수 → **예상 답 무게**(플레이트 8 · 본문 그림 1 · 항목당 80)로.
+231쪽 Barrande 는 플레이트 10장씩 6항목으로 재제출 예정.
+
 ## 남은 것
 
 - detect·link 의 **실제 프롬프트**는 PaperMeister G 단계에서 온다. 여기서 쓴 detect 프롬프트는 e2e 용이며 저장소에 두지 않았다.

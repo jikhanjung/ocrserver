@@ -909,6 +909,9 @@ llm          vllm/vllm-openai:latest       Exited
   검수 사유 대부분은 검사기 과민(키릴 오독 교정) 또는 detect 몫(파서가 사진별로 나눈 한 그림 → detect 트리거에 추가). 다음은
   **detect 표본 10건**(`detect_figures.py --limit 10`) — 서버의 첫 실제 detect. 대비해 `.env` `FIGURES_SESSION_TIMEOUT_DETECT=1200`
   (기본 600). 워커 재시작(idle 창)으로 적용.
+- **웹소켓 끊김 = 긴 답 생성 구간에서 서버가 닫는 것, 망 문제 아님** (09-18 분석, devlog 047 · memory). HTTPS(SSE) 전송 실험은
+  덜 끊기나 40 도판 항목에서 역시 3회 끊김·타임아웃 → **워커 전송 그대로**. 해법은 클라이언트의 답 크기 분할(PaperMeister `48e7047`,
+  무게 기준). 231쪽 두 묶음·291쪽 1/4 의 `budget_exhausted` 는 그 분할판 재제출로 대체. 서버 resume 하지 말 것.
 - **09-18 06:00 배치**: link 재연결 9항목(detect 로 병합된 도판, ①′→②) + **첫 실제 ③ panels 111항목**(3편, 클라이언트 `panels.md`).
   간격이 지배해(111 × 5분 ≈ 12 h) 사용자 결정으로 **`FIGURES_MIN_INTERVAL=120`** (06:02, `.env` + wrapper 재생성; 워커는 claim
   응답에서 읽으므로 재시작 불필요). 이틀간 100+ 호출에 한도·로그인 문제 0. panels 첫 결과가 오면 클라이언트 프롬프트로
