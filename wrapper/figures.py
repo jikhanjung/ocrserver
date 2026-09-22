@@ -204,7 +204,7 @@ def _worker_public(row: dict) -> dict:
         "paused_at": row.get("paused_at"),
         "next_call_at": row.get("next_call_at"),
         "last_seen": last,
-        "alive": bool(last and time.time() - last < 180),
+        "alive": bool(last and time.time() - last < max(180, MIN_INTERVAL + 60)),
         "min_interval_s": MIN_INTERVAL,
     }
 

@@ -162,7 +162,7 @@ async function refresh() {
   const onlyP = $('onlyProblems').checked;
   const dt = $('doneTable').querySelector('tbody');
   dt.innerHTML = done.filter(i => !onlyP || i.status !== 'done' || (i.summary && i.summary.skipped > 0 && i.summary.skipped >= i.summary.figures)).map(i =>
-    `<tr><td>${badge(i.status)}</td><td>${i.kind}</td><td>${clientShort(i.client_id)}</td><td>${paper(i)}</td><td class="text-end">${i.page_count ?? '—'}</td><td class="text-end">${i.attempts}</td><td>${fmtT(i.completed_at)}</td><td class="text-end">${i.elapsed_s != null ? Math.round(i.elapsed_s) : '—'}</td><td class="text-end">${fmtK(i.input_tokens)}/${fmtK(i.output_tokens)}</td><td>${resText(i)}</td><td class="wrap small text-danger">${(i.error || '').replace(/ — \\/srv.*$/, '')}</td></tr>`
+    `<tr><td>${badge(i.status)}</td><td>${i.kind}</td><td>${clientShort(i.client_id)}</td><td>${paper(i)}</td><td class="text-end">${i.page_count ?? '—'}</td><td class="text-end">${i.attempts}</td><td>${fmtT(i.completed_at)}</td><td class="text-end">${i.elapsed_s != null ? Math.round(i.elapsed_s) : '—'}</td><td class="text-end">${fmtK(i.input_tokens)}/${fmtK(i.output_tokens)}</td><td>${resText(i)}</td><td class="wrap small text-danger">${(i.error || '').replace(/ — \/srv.*$/, '')}</td></tr>`
   ).join('');
   $('lastRefresh').textContent = '갱신 ' + new Date().toLocaleTimeString('ko-KR', {hour12: false}) + ' · 30초마다';
 }
