@@ -1,4 +1,4 @@
-# HANDOFF — 2026-09-18 23:00 UTC (③ panels 112장 완주 · link 재제출 7/8 · 큐 비어 있음 · 워커 idle)
+# HANDOFF — 2026-09-23 UTC (wrapper 0.3.6 · 간격 60 s · link 165항목 배치 진행 중 · Astra/Opus 5.5 비교)
 
 > **🟢 이 박스가 현재 상태의 전부다.**
 > - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 09-08
@@ -38,7 +38,8 @@
 >   panels 파일럿 6/6 통과. 워커 상태는 `/status` 카드·`GET /api/figures`·`journalctl -u ocrserver-figures-worker -f`.
 >   `.env`: `FIGURES_WORKER_TOKEN`, `FIGURES_MIN_INTERVAL=120`(09-18, 처음 300). nginx `/internal/` 은 loopback+172.18/16 만.
 >   OCR 경로 무변 (회귀 15/15). 스모크 56 checks. e2e 산출물은 `/srv/ocrserver/figure_ws/510ea212…/`(3.6MB, 7일 TTL).
-> - 이미지: `ocrwrapper:0.3.5`, `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
+> - 이미지: `ocrwrapper:0.3.6`(09-22, `/figures` 페이지 JS 문법 오류 수정 + 워커 alive 기준), `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
+> - `.env` `FIGURES_MIN_INTERVAL=60` (09-21 11:01 UTC, 120 → 60, 사용자 결정).
 
 > **(이전 박스, 2026-09-08 — nginx upstream resolve, devlog 043)**
 > - chandra-b 정지 후 wrapper 재생성 → wrapper 가 chandra-b 의 옛 IP
@@ -81,7 +82,22 @@
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-09-17 아침 — 첫 실사용 7시간, 워커 버그 둘 수정)
+## 방금 한 작업 (2026-09-21 ~ 23 — 대형 배치 · 0.3.6 · Astra/Opus 5.5 비교)
+
+- Barrande 미완 4장(Pl. 1·I·2B·3) 을 클라이언트가 1장씩 재제출(`4e377fbc`) → 4/4 done(214–318 s). 3묶음 `e7708b8a` 1/3 은 형식상 done 이지만
+  9도판 중 1개만 답한 잘린 답(재연결 2회 뒤)이었다.
+- panels 배치 254항목(09-21 10:37 제출, 24편) **254/254 done**, 12.5 h, 실패 0, 패널 4,857. 도중 `FIGURES_MIN_INTERVAL` 120 → **60**.
+- **wrapper 0.3.6**: `/figures` 큐 페이지가 0.3.4 부터 "확인 중..." 에서 멈춰 있던 원인 = 정규식 `\\/` 문법 오류로 스크립트 전체 미실행.
+  수정 + `alive` 기준 `max(180, MIN_INTERVAL+60)`. Hub `0.3.6`+`latest`, 커밋 `b3f2d61`.
+- link 대형 배치(09-23 00:39, **165항목 / 99편**, 새 link 프롬프트·reading set) 진행 중 — 05:26 기준 done 18, 실측 ~18분/항목 → ~44 h.
+  stall 1건은 재시도에서 done.
+- **Astra vs Opus 5.5 비교** (`claude -p`, 구독 로그인): 작은 항목 6건은 2.3–4.5× 빠르고 판정 동일, 큰 link(116쪽 도판 10·항목 360)는
+  623 s vs Astra 1,296 s(+ stall 2,074 s), 구조 동일하나 Opus 는 묶음 주석·배율을 줄여 씀. 9월 8일 10장 panels 에서 Opus 5.5 IoU 0.976
+  (기준 4장 한정)이지만 **15866(27패널)에서 26·27번 표본을 자름 — 얽힌 도판은 Astra 가 낫다**. Artifact: 비교 `5NYKaa6wyY7bfoqWxjL2vN`,
+  아카이브 `DFCrmzKYwG9ayDUC5rmjyA`(v4, 링크 공개).
+- **link 소요 시간 = 답 길이** (112건: 출력 토큰 r=0.87, 항목 수 0.81, 쪽수 0.33). ≈ 150 s + 33 s/1k 출력 토큰.
+
+## 이전 작업 (2026-09-17 아침 — 첫 실사용 7시간, 워커 버그 둘 수정)
 
 - PaperMeister H 가 link 30편을 넣음. 첫 편 46쪽 968 s → link 상한 3600 s·heartbeat 4200 s 로 (sleeping 창에서 무손실 적용).
 - 6시간 뒤 점검에서 버그 둘: `Reconnecting…` error 이벤트를 실패로 오판해 **유효한 답 두 개(각 47분) 폐기** → 1차 답을 내부 API 로
@@ -876,6 +892,18 @@ llm          vllm/vllm-openai:latest       Exited
 
 ## 곧 해야 할 작업
 
+**2026-09-23 추가:**
+
+- 🔍 **검토사항: 도판 워커 동시 처리 수 (지금 1건)**. 파이프라인 조절은 거의 전부 클라이언트(PaperMeister: 무게 분할·reading set·
+  큐 채우기·검증) 몫이라, 서버에 남은 처리량 지렛대는 사실상 이것 하나(간격 60 s 는 link 에서 전체의 ~5%). 결정 보류 이유: **codex 구독
+  토큰 한도와 맞물림** — 동시 2건이면 시간당 토큰 소모도 대략 2배. 참고 수치: 24 h 275호출 무사고(09-21~22, 60 s 간격, panels 위주),
+  link 는 항목당 입력 수십만·출력 ~10–40k 토큰. 판단 재료가 필요하면 한도 경고/차단 시점의 시간당 토큰량을 먼저 확인.
+- PaperMeister `figure_queue.py` 무인 큐(기본 `--max-queue 120` "≈12 h", `--max-pages 200`)가 며칠씩 서버를 채운다. 120 ≈ 12 h 는
+  항목당 6분 가정 — link 실측은 13–18분이라 30 h+. 무인 장기 실행이 기본이 되므로 docker 자동 업그레이드 제외 결정의 비중이 커짐.
+- reading set(PaperMeister devlog 113)으로 논문당 작업 폴더가 여러 개 생긴다 — `figure_ws` 1.9 GB·81폴더(09-23), 루트 80%. 7일 TTL 로 정리되는지 관찰.
+- fsis2026 이 PaperMeister 도판 가이드를 "fsis 용으로 재작성 예정" 으로 복사(`42e559a`) — fsis 가 `/figures` 클라이언트가 되면 도판 큐에도
+  client 간 공평 분배가 필요해질 수 있음.
+
 **2026-09-16 추가:**
 
 - ~~PaperMeister 진행 대조 / 워커 유닛 설치~~ → 둘 다 끝. G 까지 수령(명세 v2·프롬프트 3벌, 계약 테스트 27 checks), 유닛 가동 중.
@@ -888,7 +916,7 @@ llm          vllm/vllm-openai:latest       Exited
   (`…#i/n`, `part`). 109쪽·도판 91 논문(`a95486d6`) 은 3차도 3600 s 상한(재연결 6회) → 클라이언트가 3항목으로 재제출 예정.
   291쪽·도판 121 잡 `2385bb6a` 는 요청대로 **cancel** 했다(0.3.5 신설). 218쪽·도판 65 잡 `3829611f` 는 취소 요청이 오기 전
   10:52–11:52 에 이미 돌아 3600 s 상한(재연결 6회, `budget_exhausted`) — 둘 다 분할 재제출 대상.
-- 소소한 표시 버그: 워커가 `sleeping`(300 s) 중이면 `/api/figures` 의 `alive` 가 false 로 보인다(last_seen 180 s 기준). 다음 wrapper 수정 때
+- ✅ (0.3.6 에서 고침) 소소한 표시 버그: 워커가 `sleeping`(300 s) 중이면 `/api/figures` 의 `alive` 가 false 로 보인다(last_seen 180 s 기준). 다음 wrapper 수정 때
   기준을 `max(180, MIN_INTERVAL+60)` 로.
 - **워커 스크립트 라이브 갱신 대기 (sudo cp, 급하지 않음)**: 13:26 커밋 — idle 감시가 `error`(재연결) 이벤트만 오는 구간을 진행으로
   안 센다. 지금 라이브(12:12 설치본)는 재연결 루프에 빠진 세션이 3600 s 하드 상한까지 간다(그 전엔 60분 → 30분 차이).
