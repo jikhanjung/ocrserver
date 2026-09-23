@@ -54,7 +54,8 @@ Current mode is visible in `/status` (mode chip) and at `_meta.mode` in
 - `devlog/YYYYMMDD_NNN_*.md` — chronological record of every meaningful
   change; the authoritative "why we did X"
 - `docs/` — INSTALL_LOCAL, RUNPOD, ARCHITECTURE, ENDPOINTS, WRAPPER_API,
-  SUBFIGURE_SPLIT (fsis2026 에서 가져온 도판→패널 분할 도구, `scripts/subfigure/`)
+  SUBFIGURE_SPLIT (fsis2026 에서 가져온 도판→패널 분할 도구, `scripts/subfigure/`),
+  FIGURE_LINK_STALLS (도판 link stall 관찰·답 길이 분석·idle 감시 판단 재료)
 - Auto-memory at `~/.claude/.../memory/` — durable preferences, gotchas,
   references; loaded into context automatically
 
