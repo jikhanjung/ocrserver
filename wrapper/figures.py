@@ -151,6 +151,15 @@ async def db_init(db: aiosqlite.Connection) -> None:
             next_call_at  REAL,
             last_seen     REAL
         );
+        -- one row per worker process (0.3.7: several workers may run at once).
+        -- figure_worker (id=1) keeps the global pause and the latest contact.
+        CREATE TABLE IF NOT EXISTS figure_worker_procs (
+            worker_id     TEXT PRIMARY KEY,
+            version       TEXT,
+            state         TEXT,
+            next_call_at  REAL,
+            last_seen     REAL
+        );
         CREATE INDEX IF NOT EXISTS idx_fitems_job ON figure_items(job_id);
         CREATE INDEX IF NOT EXISTS idx_fitems_status ON figure_items(status);
         CREATE INDEX IF NOT EXISTS idx_fitems_dedup ON figure_items(dedup_key, client_id, status);
@@ -194,19 +203,61 @@ async def _worker_row() -> dict:
     return dict(row) if row else {"state": "unknown"}
 
 
-def _worker_public(row: dict) -> dict:
-    last = row.get("last_seen")
+def _alive(last: float | None) -> bool:
+    return bool(last and time.time() - last < max(180, MIN_INTERVAL + 60))
+
+
+def _worker_public(row: dict, procs: list | None = None) -> dict:
+    """Aggregate over worker processes. The pause lives on the global row and
+    wins; otherwise running > sleeping > idle over the processes still alive."""
+    procs = procs or []
+    live = [p for p in procs if _alive(p.get("last_seen"))]
+    last = max([row.get("last_seen") or 0] + [p.get("last_seen") or 0 for p in procs]) or None
+    if row.get("state") == "paused":
+        state = "paused"
+    elif live:
+        states = {p.get("state") for p in live}
+        state = next((s for s in ("running", "sleeping", "idle") if s in states), "idle")
+    else:
+        state = row.get("state") or "unknown"
+    sleeping = [p["next_call_at"] for p in live if p.get("state") == "sleeping" and p.get("next_call_at")]
     return {
-        "state": row.get("state") or "unknown",
-        "worker_id": row.get("worker_id"),
-        "version": row.get("version"),
+        "state": state,
+        "worker_id": ", ".join(p["worker_id"] for p in live) or row.get("worker_id"),
+        "version": (live[0].get("version") if live else None) or row.get("version"),
         "paused_reason": row.get("paused_reason"),
         "paused_at": row.get("paused_at"),
-        "next_call_at": row.get("next_call_at"),
+        "next_call_at": min(sleeping) if sleeping else (row.get("next_call_at") if not live else None),
         "last_seen": last,
-        "alive": bool(last and time.time() - last < max(180, MIN_INTERVAL + 60)),
+        "alive": _alive(last),
+        "alive_count": len(live),
+        "running_count": sum(1 for p in live if p.get("state") == "running"),
+        "workers": [{"worker_id": p["worker_id"], "version": p.get("version"), "state": p.get("state"),
+                     "next_call_at": p.get("next_call_at"), "last_seen": p.get("last_seen"),
+                     "alive": _alive(p.get("last_seen"))} for p in procs],
         "min_interval_s": MIN_INTERVAL,
     }
+
+
+async def _worker_view() -> dict:
+    async with _db().execute(
+        "SELECT * FROM figure_worker_procs WHERE last_seen > ? ORDER BY worker_id",
+        (time.time() - 86400,)) as c:
+        procs = [dict(r) for r in await c.fetchall()]
+    return _worker_public(await _worker_row(), procs)
+
+
+async def _touch_proc(worker_id: str | None, state: str | None = None, **extra) -> None:
+    if not worker_id:
+        return
+    now = time.time()
+    await _db().execute(
+        "INSERT INTO figure_worker_procs (worker_id, version, state, next_call_at, last_seen) "
+        "VALUES (?,?,?,?,?) ON CONFLICT(worker_id) DO UPDATE SET "
+        "version=COALESCE(excluded.version, version), state=COALESCE(excluded.state, state), "
+        "next_call_at=CASE WHEN excluded.state IS NULL THEN next_call_at ELSE excluded.next_call_at END, "
+        "last_seen=excluded.last_seen",
+        (worker_id, extra.get("version"), state, extra.get("next_call_at"), now))
 
 
 async def _workspace_exists(file_hash: str, ocr_digest: str) -> bool:
@@ -348,7 +399,7 @@ async def _job_public(job_id: str, with_items: bool = True) -> dict | None:
         ) as c:
             items = [dict(r) for r in await c.fetchall()]
         out["items"] = [_item_public(i) for i in items]
-    out["worker"] = _worker_public(await _worker_row())
+    out["worker"] = await _worker_view()
     return out
 
 
@@ -553,7 +604,7 @@ async def list_jobs(
     params.append(limit)
     async with _db().execute(sql, params) as c:
         rows = [dict(r) for r in await c.fetchall()]
-    return {"items": rows, "worker": _worker_public(await _worker_row())}
+    return {"items": rows, "worker": await _worker_view()}
 
 
 @router.get("/figures/{kind}/{job_id}")
@@ -614,7 +665,7 @@ async def worker_resume():
     await db.execute(
         "UPDATE figure_worker SET state='idle', paused_reason=NULL, paused_at=NULL WHERE id=1")
     await db.commit()
-    return _worker_public(await _worker_row())
+    return await _worker_view()
 
 
 # ── dashboard summary ─────────────────────────────────────────────────────────
@@ -645,7 +696,7 @@ async def api_figures():
         ws = (await c.fetchone())[0]
     return {
         "available": True,
-        "worker": _worker_public(await _worker_row()),
+        "worker": await _worker_view(),
         "worker_api_enabled": bool(WORKER_TOKEN),
         "jobs": jobs,
         "items": items,
@@ -744,7 +795,7 @@ async def api_figure_items(
         "AND completed_at >= ? GROUP BY kind", (time.time() - 86400,)) as c:
         avg = {k: {"avg_elapsed_s": round(a or 0), "n": n} for k, a, n in await c.fetchall()}
     return {"items": items, "avg_24h": avg, "min_interval_s": MIN_INTERVAL,
-            "worker": _worker_public(await _worker_row())}
+            "worker": await _worker_view()}
 
 
 _PAGE_CACHE: dict = {}
@@ -790,13 +841,19 @@ async def worker_status(payload: dict, x_worker_token: str | None = Header(None)
             (payload.get("worker_id"), payload.get("version"), payload.get("paused_reason"),
              now, payload.get("next_call_at"), now))
     else:
+        # A worker's routine status post must not lift a fatal pause (usage limit,
+        # login) — before 0.3.7 the worker's own "idle" right after the fatal
+        # result cleared it. Only POST /figures/worker/resume clears a pause.
         await db.execute(
-            "UPDATE figure_worker SET worker_id=?, version=?, state=?, paused_reason=NULL, "
-            "paused_at=NULL, next_call_at=?, last_seen=? WHERE id=1",
+            "UPDATE figure_worker SET worker_id=?, version=?, "
+            "state=CASE WHEN state='paused' THEN state ELSE ? END, "
+            "next_call_at=?, last_seen=? WHERE id=1",
             (payload.get("worker_id"), payload.get("version"), state,
              payload.get("next_call_at"), now))
+    await _touch_proc(payload.get("worker_id"), state, version=payload.get("version"),
+                      next_call_at=payload.get("next_call_at"))
     await db.commit()
-    return _worker_public(await _worker_row())
+    return await _worker_view()
 
 
 @router.post("/internal/figures/claim")
@@ -811,9 +868,10 @@ async def claim(payload: dict, x_worker_token: str | None = Header(None)):
     await _requeue_stale()
     row = await _worker_row()
     await db.execute("UPDATE figure_worker SET worker_id=?, last_seen=? WHERE id=1", (worker_id, now))
+    await _touch_proc(worker_id)
     if row.get("state") == "paused":
         await db.commit()
-        return {"item": None, "worker": _worker_public(await _worker_row()),
+        return {"item": None, "worker": await _worker_view(),
                 "min_interval_s": MIN_INTERVAL}
     async with db.execute(
         "SELECT i.client_id, MIN(j.submitted_at) AS first_sub, "
@@ -826,7 +884,7 @@ async def claim(payload: dict, x_worker_token: str | None = Header(None)):
         pick = await c.fetchone()
     if not pick:
         await db.commit()
-        return {"item": None, "worker": _worker_public(await _worker_row()),
+        return {"item": None, "worker": await _worker_view(),
                 "min_interval_s": MIN_INTERVAL}
     client_id = pick[0]
     async with db.execute(
@@ -861,7 +919,7 @@ async def claim(payload: dict, x_worker_token: str | None = Header(None)):
             # no pdf_path: it would be the container's path — the worker resolves
             # PDF_DIR/{file_hash}.pdf on its own side (2026-09-16 e2e lesson).
         },
-        "worker": _worker_public(await _worker_row()),
+        "worker": await _worker_view(),
         "min_interval_s": MIN_INTERVAL,
     }
 
@@ -889,7 +947,11 @@ async def item_heartbeat(item_id: str, x_worker_token: str | None = Header(None)
     cur = await db.execute(
         "UPDATE figure_items SET heartbeat_at=? WHERE item_id=? AND status='processing'",
         (now, item_id))
-    await db.execute("UPDATE figure_worker SET last_seen=?, state='running' WHERE id=1", (now,))
+    await db.execute("UPDATE figure_worker SET last_seen=?, "
+                     "state=CASE WHEN state='paused' THEN state ELSE 'running' END WHERE id=1", (now,))
+    async with db.execute("SELECT claimed_by FROM figure_items WHERE item_id=?", (item_id,)) as c:
+        by = await c.fetchone()
+    await _touch_proc(by[0] if by else None, "running")
     await db.commit()
     if not cur.rowcount:
         async with db.execute("SELECT status FROM figure_items WHERE item_id=?", (item_id,)) as c:
@@ -917,7 +979,8 @@ async def item_release(item_id: str, payload: dict | None = None,
     async with db.execute("SELECT job_id FROM figure_items WHERE item_id=?", (item_id,)) as c:
         job_id = (await c.fetchone())[0]
     await _refresh_job_status(job_id)
-    await db.execute("UPDATE figure_worker SET state='idle', last_seen=? WHERE id=1", (time.time(),))
+    await db.execute("UPDATE figure_worker SET state=CASE WHEN state='paused' THEN state ELSE 'idle' END, "
+                     "last_seen=? WHERE id=1", (time.time(),))
     await db.commit()
     return {"item_id": item_id, "status": "queued"}
 
@@ -1002,4 +1065,4 @@ async def item_result(item_id: str, payload: dict, x_worker_token: str | None = 
     async with db.execute("SELECT status, attempts FROM figure_items WHERE item_id=?", (item_id,)) as c:
         st = await c.fetchone()
     return {"item_id": item_id, "status": st[0], "attempts": st[1],
-            "worker": _worker_public(await _worker_row())}
+            "worker": await _worker_view()}

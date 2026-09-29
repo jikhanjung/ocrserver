@@ -144,8 +144,15 @@ with TestClient(main.app) as c:
     r = c.post("/internal/figures/claim", json={"worker_id": "w1"}, headers=W)
     ok(r.json()["item"] is None and r.json()["worker"]["state"] == "paused", "claim returns nothing while paused")
     ok(c.get("/api/figures").json()["worker"]["paused_reason"].startswith("ChatGPT"), "api/figures shows pause")
+    # 0.3.7: the worker's routine status posts (its own "idle" right after the fatal,
+    # or a second worker's "sleeping") must not lift the pause
+    for wid, st in (("w1", "idle"), ("w2", "sleeping")):
+        r = c.post("/internal/figures/worker/status", headers=W, json={"worker_id": wid, "version": "0.3.7", "state": st, "next_call_at": 1})
+        ok(r.json()["state"] == "paused", f"status post {wid}:{st} keeps the pause {r.text}")
+    r = c.post("/internal/figures/claim", json={"worker_id": "w2"}, headers=W)
+    ok(r.json()["item"] is None, "still no claim after status posts")
     r = c.post("/figures/worker/resume")
-    ok(r.json()["state"] == "idle", "worker resume")
+    ok(r.json()["state"] != "paused" and r.json()["paused_reason"] is None, "worker resume")
 
     # ── result: failed twice → failed (MAX_ATTEMPTS=2) ──
     r = c.post("/internal/figures/claim", json={"worker_id": "w1"}, headers=W)
@@ -212,6 +219,13 @@ with TestClient(main.app) as c:
     # ── worker status + summary ──
     r = c.post("/internal/figures/worker/status", headers=W, json={"worker_id": "w1", "version": "0.3.0", "state": "sleeping", "next_call_at": 1})
     ok(r.json()["state"] == "sleeping", "worker status")
+    # two processes: one running, one sleeping → aggregate says running 1/2
+    r = c.post("/internal/figures/worker/status", headers=W, json={"worker_id": "w2", "version": "0.3.7", "state": "running"})
+    wv = r.json()
+    ok(wv["state"] == "running" and wv["alive_count"] == 2 and wv["running_count"] == 1
+       and {x["worker_id"] for x in wv["workers"]} >= {"w1", "w2"}, f"two workers aggregate {wv}")
+    r = c.post("/internal/figures/worker/status", headers=W, json={"worker_id": "w2", "version": "0.3.7", "state": "sleeping", "next_call_at": 2})
+    ok(r.json()["state"] == "sleeping" and r.json()["next_call_at"] == 1, "both sleeping → earliest next call")
     f = c.get("/api/figures").json()
     ok(f["calls_24h"]["total"] >= 8 and f["items"]["panels"]["done"] >= 5 and f["worker"]["alive"], f"summary {json.dumps(f)[:300]}")
     # cancel: queued items dropped, running item aborted via heartbeat 409

@@ -115,7 +115,7 @@ async function refresh() {
   let cls = 'bg-secondary', text = '워커 없음';
   if (w.state === 'paused') { cls = 'bg-danger'; text = '정지: ' + (w.paused_reason || '').slice(0, 50); }
   else if (!w.alive) { cls = 'bg-warning text-dark'; text = '워커 연결 끊김'; }
-  else if (w.state === 'running') { cls = 'bg-primary'; text = '실행 중'; }
+  else if (w.state === 'running') { cls = 'bg-primary'; text = '실행 중' + ((w.alive_count || 1) > 1 ? ` ${w.running_count}/${w.alive_count}` : ''); }
   else if (w.state === 'sleeping') { cls = 'bg-info text-dark'; text = '간격 대기'; }
   else { cls = 'bg-success'; text = '대기 (idle)'; }
   wb.className = 'badge fs-6 px-3 py-2 ' + cls; wb.textContent = text;
@@ -147,7 +147,9 @@ async function refresh() {
   // ETA: for each queued item use its kind's average; running item: remaining of avg
   let eta = 0;
   active.forEach(i => { const a = avgOf(i.kind) || 300; if (i.status === 'processing') eta += Math.max(0, a - (Date.now() / 1000 - (i.claimed_at || Date.now() / 1000))); else eta += a; eta += interval; });
-  $('mEta').textContent = active.length ? fmtDur(eta) : '—';
+  const nWorkers = Math.max(1, w.alive_count || 1);  // 0.3.7: several worker processes share the queue
+  eta = eta / nWorkers;
+  $('mEta').textContent = active.length ? fmtDur(eta) + (nWorkers > 1 ? ` · 워커 ${nWorkers}` : '') : '—';
   $('mProcessingHint').textContent = nProc ? `${clientShort(active.find(i => i.status === 'processing').client_id)}` : '';
 
   const now = Date.now() / 1000;

@@ -8,8 +8,10 @@
                                                               ├─ renders the figure crop / target page
                                                               └─ runs `codex exec` (gpt-6-astra) and posts the JSON back
 
-One item at a time. One call per FIGURES_MIN_INTERVAL seconds (advertised by
-the wrapper, D8). Never touches SQLite. Never reads the wrapper's OCR rows —
+One item at a time per process. One call per FIGURES_MIN_INTERVAL seconds per
+process (advertised by the wrapper, D8). Several processes may run at once
+(0.3.7, systemd template `ocrserver-figures-worker@N`, each with its own
+FIGURES_WORKER_ID); they share the workspace dir under a per-paper file lock. Never touches SQLite. Never reads the wrapper's OCR rows —
 workspace text comes from what the client uploaded (P02 §3.3).
 
 Outcomes reported to the wrapper (see wrapper/figures.py item_result):
@@ -30,6 +32,7 @@ Env (systemd unit loads /srv/ocrserver/.env):
     FIGURES_TARGET_DPI     default 150  target page with the hint box (detect)
     FIGURES_MAX_LONG_PX    default 4000 cap for the panels crop
 """
+import fcntl
 import html
 import json
 import os
@@ -46,7 +49,7 @@ import fitz
 import requests
 from PIL import Image, ImageDraw
 
-VERSION = "0.3.0"
+VERSION = "0.3.7"
 WRAPPER_URL = os.getenv("WRAPPER_URL", "http://127.0.0.1:8080").rstrip("/")
 TOKEN = os.getenv("FIGURES_WORKER_TOKEN", "")
 PDF_DIR = os.getenv("PDF_DIR", "/srv/ocrserver/data/pdfs")
@@ -65,8 +68,9 @@ WS_TTL_DAYS = int(os.getenv("FIGURES_WORKSPACE_TTL_DAYS", "7"))
 # No new stdout from codex for this long → the stream is hung (KOPRI network websocket
 # stalls seen 2026-09-17), kill and retry instead of burning the whole session cap.
 IDLE_TIMEOUT = int(os.getenv("FIGURES_IDLE_TIMEOUT", "1800"))
-NEXT_CALL_FILE = os.path.join(WS_DIR, ".next_call_at")
 WORKER_ID = os.getenv("FIGURES_WORKER_ID", socket.gethostname())
+# per process: two workers must not read each other's pacing
+NEXT_CALL_FILE = os.path.join(WS_DIR, f".next_call_at.{WORKER_ID}")
 DEFAULT_MODEL = "gpt-6-astra"
 
 # Fatal = the next item would fail the same way; the wrapper pauses us.
@@ -170,6 +174,17 @@ def ensure_workspace(file_hash: str, ocr_digest: str, pdf_path: str) -> str:
     ready = os.path.join(root, ".ready")
     if os.path.exists(ready):
         return root
+    os.makedirs(root, exist_ok=True)
+    # Another worker process may be building the same paper right now: wait for
+    # it, then re-check instead of writing the same files underneath it.
+    with open(os.path.join(root, ".lock"), "w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        if os.path.exists(ready):
+            return root
+        return _build_workspace(root, ready, file_hash, ocr_digest, pdf_path)
+
+
+def _build_workspace(root: str, ready: str, file_hash: str, ocr_digest: str, pdf_path: str) -> str:
     os.makedirs(os.path.join(root, "text"), exist_ok=True)
     os.makedirs(os.path.join(root, "pages"), exist_ok=True)
     ws = api("GET", f"/internal/figures/workspace/{file_hash}/{ocr_digest}", timeout=120)
