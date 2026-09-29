@@ -1,4 +1,4 @@
-# HANDOFF — 2026-09-23 UTC (wrapper 0.3.6 · 간격 60 s · link 165항목 배치 진행 중 · Astra/Opus 5.5 비교)
+# HANDOFF — 2026-09-29 UTC (도판 워커 2개 · wrapper 0.3.8 · 누적 panels 2.7k · link 572)
 
 > **🟢 이 박스가 현재 상태의 전부다.**
 > - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 09-08
@@ -38,7 +38,9 @@
 >   panels 파일럿 6/6 통과. 워커 상태는 `/status` 카드·`GET /api/figures`·`journalctl -u ocrserver-figures-worker -f`.
 >   `.env`: `FIGURES_WORKER_TOKEN`, `FIGURES_MIN_INTERVAL=120`(09-18, 처음 300). nginx `/internal/` 은 loopback+172.18/16 만.
 >   OCR 경로 무변 (회귀 15/15). 스모크 56 checks. e2e 산출물은 `/srv/ocrserver/figure_ws/510ea212…/`(3.6MB, 7일 TTL).
-> - 이미지: `ocrwrapper:0.3.6`(09-22, `/figures` 페이지 JS 문법 오류 수정 + 워커 alive 기준), `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
+> - 이미지: `ocrwrapper:0.3.8`(09-29, 워커 여러 개·claim 원자화·일시정지 버그 수정, devlog 048), `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
+> - **도판 워커 2개**: systemd `ocrserver-figures-worker@1`·`@2`(id `jikhanserver-1/-2`, 스크립트 0.3.7). 옛 단일 유닛은 disabled.
+>   로그 `journalctl -u 'ocrserver-figures-worker@*' -f`. 하나로 되돌리기 `sudo systemctl disable --now ocrserver-figures-worker@2`.
 > - `.env` `FIGURES_MIN_INTERVAL=60` (09-21 11:01 UTC, 120 → 60, 사용자 결정).
 
 > **(이전 박스, 2026-09-08 — nginx upstream resolve, devlog 043)**
@@ -82,7 +84,17 @@
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-09-21 ~ 23 — 대형 배치 · 0.3.6 · Astra/Opus 5.5 비교)
+## 방금 한 작업 (2026-09-29 — 도판 워커 2개, devlog 048)
+
+- 09-25~29 누적: panels done 473 → 2,697, link 291 → 572. 24 h 호출 529/529 ok(09-29). link failed 누적 10 — 새 5건 중
+  `79fa0b44`·`e0837de8` 은 **같은 크기로 재제출돼 또 실패**(클라이언트가 더 잘게 나눠야 함). panels budget_exhausted 5(09-25 22:48–23:32
+  연속, 600 s 초과 — 그 시간대만), panels cancelled 100(09-25 03:58 클라이언트 취소).
+- **워커 2개로** (사용자 결정): wrapper 0.3.7 — 워커 프로세스별 상태 행·집계, **fatal 일시정지가 워커의 상태 보고로 바로 풀리던
+  기존 버그 수정**, 워커 flock·프로세스별 간격 파일, systemd 템플릿. 전환 직후 두 워커가 같은 항목을 claim(경합) →
+  **0.3.8** 에서 조건부 UPDATE 로 원자화, 스모크 79 checks(병렬 claim 검사 추가, 옛 코드로는 실패 확인). 이후 두 워커가 서로 다른 항목 처리 확인.
+- `figure_ws` 7.9 GB(09-29, 7일 넘은 폴더 0 — TTL 동작), 루트 82%.
+
+## 이전 작업 (2026-09-21 ~ 23 — 대형 배치 · 0.3.6 · Astra/Opus 5.5 비교)
 
 - Barrande 미완 4장(Pl. 1·I·2B·3) 을 클라이언트가 1장씩 재제출(`4e377fbc`) → 4/4 done(214–318 s). 3묶음 `e7708b8a` 1/3 은 형식상 done 이지만
   9도판 중 1개만 답한 잘린 답(재연결 2회 뒤)이었다.
@@ -892,9 +904,15 @@ llm          vllm/vllm-openai:latest       Exited
 
 ## 곧 해야 할 작업
 
+**2026-09-29 추가:**
+
+- 워커 2개 첫 며칠: 24 h 호출 수·ok 비율·stall 빈도가 1개 때(529/529)와 비교해 어떤지, codex 사용량 한도 경고가 오는지. 한도에 걸리면
+  두 워커가 함께 멈춘다 → 원인 해결 후 `POST /figures/worker/resume`. 필요하면 `@2` 만 끄면 된다.
+- PaperMeister 에 전할 것: link failed 10건 중 같은 크기 재제출로 다시 실패한 `79fa0b44`·`e0837de8` — 더 잘게(플레이트 1장 단위까지).
+
 **2026-09-23 추가:**
 
-- 🔍 **검토사항: 도판 워커 동시 처리 수 (지금 1건)**. 파이프라인 조절은 거의 전부 클라이언트(PaperMeister: 무게 분할·reading set·
+- ✅ (09-29 워커 2개로 결정·적용, devlog 048) ~~검토사항: 도판 워커 동시 처리 수 (지금 1건)~~. 파이프라인 조절은 거의 전부 클라이언트(PaperMeister: 무게 분할·reading set·
   큐 채우기·검증) 몫이라, 서버에 남은 처리량 지렛대는 사실상 이것 하나(간격 60 s 는 link 에서 전체의 ~5%). 결정 보류 이유: **codex 구독
   토큰 한도와 맞물림** — 동시 2건이면 시간당 토큰 소모도 대략 2배. 참고 수치: 24 h 275호출 무사고(09-21~22, 60 s 간격, panels 위주),
   link 는 항목당 입력 수십만·출력 ~10–40k 토큰. 판단 재료가 필요하면 한도 경고/차단 시점의 시간당 토큰량을 먼저 확인.

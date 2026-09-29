@@ -216,13 +216,23 @@ with TestClient(main.app) as c:
     r = c.post("/figures/panels", json={**base, "client_id": "pm-c", "items": items})
     ok(r.json()["cached"] == 0, "dedup is per client_id")
 
+    # ── 0.3.7: parallel claims from several workers never share an item ──
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(6) as ex:
+        got = list(ex.map(lambda k: c.post("/internal/figures/claim", json={"worker_id": f"p{k}"}, headers=W).json()["item"], range(6)))
+    ids = [g["item_id"] for g in got if g]
+    ok(len(ids) >= 2 and len(ids) == len(set(ids)), f"parallel claims unique {len(ids)} claimed, {len(set(ids))} distinct")
+    for g in got:
+        if g:
+            c.post(f"/internal/figures/items/{g['item_id']}/release", headers=W, json={"reason": "test"})
+
     # ── worker status + summary ──
     r = c.post("/internal/figures/worker/status", headers=W, json={"worker_id": "w1", "version": "0.3.0", "state": "sleeping", "next_call_at": 1})
     ok(r.json()["state"] == "sleeping", "worker status")
     # two processes: one running, one sleeping → aggregate says running 1/2
     r = c.post("/internal/figures/worker/status", headers=W, json={"worker_id": "w2", "version": "0.3.7", "state": "running"})
     wv = r.json()
-    ok(wv["state"] == "running" and wv["alive_count"] == 2 and wv["running_count"] == 1
+    ok(wv["state"] == "running" and wv["alive_count"] >= 2 and wv["running_count"] == 1
        and {x["worker_id"] for x in wv["workers"]} >= {"w1", "w2"}, f"two workers aggregate {wv}")
     r = c.post("/internal/figures/worker/status", headers=W, json={"worker_id": "w2", "version": "0.3.7", "state": "sleeping", "next_call_at": 2})
     ok(r.json()["state"] == "sleeping" and r.json()["next_call_at"] == 1, "both sleeping → earliest next call")

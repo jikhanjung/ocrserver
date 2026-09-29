@@ -224,7 +224,7 @@ def _worker_public(row: dict, procs: list | None = None) -> dict:
     return {
         "state": state,
         "worker_id": ", ".join(p["worker_id"] for p in live) or row.get("worker_id"),
-        "version": (live[0].get("version") if live else None) or row.get("version"),
+        "version": max((p.get("version") or "" for p in live), default="") or row.get("version"),
         "paused_reason": row.get("paused_reason"),
         "paused_at": row.get("paused_at"),
         "next_call_at": min(sleeping) if sleeping else (row.get("next_call_at") if not live else None),
@@ -873,6 +873,33 @@ async def claim(payload: dict, x_worker_token: str | None = Header(None)):
         await db.commit()
         return {"item": None, "worker": await _worker_view(),
                 "min_interval_s": MIN_INTERVAL}
+    # Pick and mark in a loop: with several worker processes two claims can pick
+    # the same item between the SELECT and the UPDATE (0.3.7, seen at the first
+    # two-worker start). The UPDATE only wins while the item is still queued.
+    for _ in range(8):
+        item = await _pick_queued()
+        if item is None:
+            break
+        cur = await db.execute(
+            "UPDATE figure_items SET status='processing', attempts=attempts+1, claimed_by=?, "
+            "claimed_at=?, heartbeat_at=? WHERE item_id=? AND status='queued'",
+            (worker_id, now, now, item["item_id"]))
+        if cur.rowcount:
+            break
+        item = None
+    if item is None:
+        await db.commit()
+        return {"item": None, "worker": await _worker_view(),
+                "min_interval_s": MIN_INTERVAL}
+    await _refresh_job_status(item["job_id"])
+    await db.commit()
+    return _claim_payload(item) | {"worker": await _worker_view(), "min_interval_s": MIN_INTERVAL}
+
+
+async def _pick_queued() -> dict | None:
+    """Fair across clients: the client whose last completed item is oldest goes
+    first (round robin by completion), then the oldest job within that client."""
+    db = _db()
     async with db.execute(
         "SELECT i.client_id, MIN(j.submitted_at) AS first_sub, "
         "  (SELECT MAX(completed_at) FROM figure_items d WHERE d.client_id IS i.client_id "
@@ -883,9 +910,7 @@ async def claim(payload: dict, x_worker_token: str | None = Header(None)):
     ) as c:
         pick = await c.fetchone()
     if not pick:
-        await db.commit()
-        return {"item": None, "worker": await _worker_view(),
-                "min_interval_s": MIN_INTERVAL}
+        return None
     client_id = pick[0]
     async with db.execute(
         "SELECT i.*, j.kind AS job_kind, j.prompt_json, j.options_json, j.prompt_version "
@@ -895,13 +920,10 @@ async def claim(payload: dict, x_worker_token: str | None = Header(None)):
         (client_id,),
     ) as c:
         item = await c.fetchone()
-    item = dict(item)
-    await db.execute(
-        "UPDATE figure_items SET status='processing', attempts=attempts+1, claimed_by=?, "
-        "claimed_at=?, heartbeat_at=? WHERE item_id=?",
-        (worker_id, now, now, item["item_id"]))
-    await _refresh_job_status(item["job_id"])
-    await db.commit()
+    return dict(item) if item else None
+
+
+def _claim_payload(item: dict) -> dict:
     return {
         "item": {
             "item_id": item["item_id"],
@@ -919,8 +941,6 @@ async def claim(payload: dict, x_worker_token: str | None = Header(None)):
             # no pdf_path: it would be the container's path — the worker resolves
             # PDF_DIR/{file_hash}.pdf on its own side (2026-09-16 e2e lesson).
         },
-        "worker": await _worker_view(),
-        "min_interval_s": MIN_INTERVAL,
     }
 
 
