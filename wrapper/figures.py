@@ -20,6 +20,7 @@ PaperMeister P16 §6 / docs/figure_pipeline_client_plan.md. Key contracts:
 import asyncio
 import hashlib
 import json
+import re
 import os
 import time
 import uuid
@@ -710,6 +711,23 @@ async def api_figures():
     }
 
 
+_SEG_ENTRY = re.compile(r"^\s*e\s+([^|:]+?)\s*(?:\||::)")
+
+
+def _link_entry_count(fig: dict) -> int:
+    """Entries of one link figure: the `entries` list, or — for the compact
+    caption-segment format (P03, `segs`: one `e <labels> … :: text` line per
+    entry) — the labels on its `e` lines."""
+    if isinstance(fig.get("entries"), list):
+        return len(fig["entries"])
+    n = 0
+    for line in str(fig.get("segs") or "").splitlines():
+        m = _SEG_ENTRY.match(line)
+        if m:
+            n += len([x for x in m.group(1).split(",") if x.strip()])
+    return n
+
+
 def _result_summary(kind: str, result: dict | None) -> dict:
     """Small, kind-specific digest of a stored result for the queue page."""
     if not isinstance(result, dict):
@@ -717,7 +735,7 @@ def _result_summary(kind: str, result: dict | None) -> dict:
     try:
         if kind == "link":
             figs = result.get("figures") or []
-            return {"figures": len(figs), "entries": sum(len(f.get("entries") or []) for f in figs),
+            return {"figures": len(figs), "entries": sum(_link_entry_count(f) for f in figs),
                     "skipped": len(result.get("skipped") or []),
                     "pages_consulted": len(result.get("pages_consulted") or [])}
         if kind == "panels":
