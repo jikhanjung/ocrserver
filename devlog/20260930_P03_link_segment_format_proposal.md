@@ -50,7 +50,7 @@ t 3,4 :: Scale bar 100 μm.
 
 - 지시문: `scripts/experiments/link_segments/seg_format_proposed.md` (지금 link 지시문 끝에 덧붙임. v3 + `d` 남용 방지 한 줄)
 - 스키마: 지금 스키마에서 도판의 `caption`·`entries` 를 `segs: string` 으로 바꾼 것(`build.py` 의 `compact_schema`)
-- 복원기: `expand.py` (약 70줄, 의존성 없음). PaperMeister 쪽에 옮겨 쓰면 된다.
+- 복원기: `expand.py` (56줄, 표준 라이브러리만). PaperMeister 쪽에 옮겨 쓰면 된다.
 
 ## 3. 실측 — 같은 10건, 세 차례
 
