@@ -1,4 +1,4 @@
-# HANDOFF — 2026-09-29 UTC (도판 워커 2개 · wrapper 0.3.8 · 누적 panels 2.7k · link 572)
+# HANDOFF — 2026-09-30 05:00 UTC (커널 7.0.0-34 재부팅 · 워커 0.3.9 한도 오탐 수정 · wrapper 0.3.9 · link 구간 형식 P03 도입됨)
 
 > **🟢 이 박스가 현재 상태의 전부다.**
 > - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 09-08
@@ -38,8 +38,10 @@
 >   panels 파일럿 6/6 통과. 워커 상태는 `/status` 카드·`GET /api/figures`·`journalctl -u ocrserver-figures-worker -f`.
 >   `.env`: `FIGURES_WORKER_TOKEN`, `FIGURES_MIN_INTERVAL=120`(09-18, 처음 300). nginx `/internal/` 은 loopback+172.18/16 만.
 >   OCR 경로 무변 (회귀 15/15). 스모크 56 checks. e2e 산출물은 `/srv/ocrserver/figure_ws/510ea212…/`(3.6MB, 7일 TTL).
-> - 이미지: `ocrwrapper:0.3.8`(09-29, 워커 여러 개·claim 원자화·일시정지 버그 수정, devlog 048), `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
-> - **도판 워커 2개**: systemd `ocrserver-figures-worker@1`·`@2`(id `jikhanserver-1/-2`, 스크립트 0.3.7). 옛 단일 유닛은 disabled.
+> - 이미지: `ocrwrapper:0.3.9`(09-30, link 요약이 구간 형식 `segs` 항목 수를 셈; 0.3.8 = 워커 여러 개·claim 원자화·일시정지 수정, devlog 048), `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
+> - **호스트**: 09-29 20:52 UTC 재부팅(커널 7.0.0-31 → **7.0.0-34**, libc6). 드라이버 595.91.07 DKMS 정상, 코어 4·5 격리·kdump 재적용 확인,
+>   OCR 회귀 `kruskal1964.pdf` 15/15(82 s, 이전 두 회와 단어 유사도 기준선 안).
+> - **도판 워커 2개**: systemd `ocrserver-figures-worker@1`·`@2`(id `jikhanserver-1/-2`, 스크립트 **0.3.9**, 09-30 04:46 반영). 옛 단일 유닛은 disabled.
 >   로그 `journalctl -u 'ocrserver-figures-worker@*' -f`. 하나로 되돌리기 `sudo systemctl disable --now ocrserver-figures-worker@2`.
 > - `.env` `FIGURES_MIN_INTERVAL=60` (09-21 11:01 UTC, 120 → 60, 사용자 결정).
 
@@ -84,7 +86,23 @@
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-09-29 — 도판 워커 2개, devlog 048)
+## 방금 한 작업 (2026-09-29 밤 ~ 09-30 — 재부팅 · link 출력 분석과 구간 형식 A/B · 한도 오탐)
+
+- **재부팅** (09-29 20:52 UTC, 사용자): 커널 7.0.0-34. 드라이버·코어 격리·kdump·컨테이너·워커 2개 자동 복구, OCR 회귀 15/15.
+  워커 2개로 panels 시간당 ~60–76건(1개 때 ~25).
+- **link 출력 분석** (`docs/FIGURE_LINK_STALLS.md` §5–6): 출력의 88.6% 가 최종 JSON, 소요 ≈ 94 s + 33.5 s/1k 출력 토큰(r = 0.96).
+  항목 설명 구절의 89% 가 캡션 중복. panels 는 고정비 지배라 출력 간소화 효과 작음.
+- **구간 형식 A/B** (캡션을 조각으로 한 번만, 스크립트가 원래 스키마로 복원): 같은 link 10건 × v1–v3 = 30회, stall 0·스키마 오류 0,
+  출력 55–65%·시간 65–75%, v3 설명 유사도 0.88. 스크립트 `scripts/experiments/link_segments/`(결과 `~/.cache/ocrserver-ab/`).
+  A/B 도중 제가 운영 워커 `@2` 의 codex 세션 하나를 A/B 것으로 착각해 끊음(panels 4993, 시도 1회 소모 후 재처리) — README 에 주의 기록.
+- **P03 제안서** `devlog/20260930_P03_link_segment_format_proposal.md` → **PaperMeister 가 바로 도입**: 09-30 03:44 에 `segs` 형식 link 144건 제출
+  (`link-v1-8d37240149cd`).
+- **한도 오탐 (09-30 03:59 → 04:46)**: 정상 완료된 link 답의 notes "OCR **quota**tion-mark rendering" 이 워커 fatal 문자열 `quota` 에 걸려 답을
+  버리고 두 워커 일시정지(~47분). 0.3.7 에서 정지가 제대로 유지되게 고친 뒤 처음 드러난 오판. **워커 0.3.9**: 완료된 턴은 fatal 아님,
+  미완료 턴도 codex 오류 이벤트·stderr 에서만 찾음(`dab19d0`). 사용자 반영 후 resume.
+- **wrapper 0.3.9**: `/figures` link 요약이 `segs` 의 `e` 줄 라벨로 항목 수를 셈(`89a89d3`). 구간 형식 답의 실제 완료 건으로는 아직 미확인.
+
+## 이전 작업 (2026-09-29 — 도판 워커 2개, devlog 048)
 
 - 09-25~29 누적: panels done 473 → 2,697, link 291 → 572. 24 h 호출 529/529 ok(09-29). link failed 누적 10 — 새 5건 중
   `79fa0b44`·`e0837de8` 은 **같은 크기로 재제출돼 또 실패**(클라이언트가 더 잘게 나눠야 함). panels budget_exhausted 5(09-25 22:48–23:32
@@ -903,6 +921,14 @@ llm          vllm/vllm-openai:latest       Exited
   3DGS) 는 `done_with_errors` 로 reconcile 됨. 사용자가 재업로드 필요.
 
 ## 곧 해야 할 작업
+
+**2026-09-30 추가:**
+
+- 구간 형식(P03) link 첫 완료분 확인: `/figures` 요약의 항목 수가 0 이 아닌지(0.3.9), 시간·출력이 A/B 수치(출력 55–65%)와 맞는지,
+  stall 이 줄었는지. `figure_ws/<hash>/<digest>/items/<id>/run/aN/` 의 `response.json` 에 `segs`.
+- `seg_format_proposed.md` 의 `d=` 남용 방지 한 줄은 A/B 에서 시험하지 않았다 — PaperMeister 가 쓴 지시문에 들어갔는지, `d=` 빈도(러시아어
+  а/б 하위 항목 도판)를 운영 답에서 확인.
+- 워커 fatal 판정: 이제 한도는 codex 오류 이벤트로만 잡힌다. 실제 사용량 한도가 오면 제대로 멈추는지(두 워커 동시 정지) 첫 사례에서 확인.
 
 **2026-09-29 추가:**
 
