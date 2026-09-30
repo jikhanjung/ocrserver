@@ -49,7 +49,7 @@ import fitz
 import requests
 from PIL import Image, ImageDraw
 
-VERSION = "0.3.7"
+VERSION = "0.3.9"
 WRAPPER_URL = os.getenv("WRAPPER_URL", "http://127.0.0.1:8080").rstrip("/")
 TOKEN = os.getenv("FIGURES_WORKER_TOKEN", "")
 PDF_DIR = os.getenv("PDF_DIR", "/srv/ocrserver/data/pdfs")
@@ -382,6 +382,21 @@ def _strip_noise(s: str) -> str:
     return "\n".join(l for l in (s or "").splitlines() if not any(n in l.lower() for n in NOISE))
 
 
+def error_text(stdout: str) -> str:
+    """Only codex's own error events — never the model's messages or command
+    output. 2026-09-30: a note saying "OCR quotation-mark rendering" matched
+    "quota" and paused both workers for hours on a successful answer."""
+    out = []
+    for line in (stdout or "").splitlines():
+        try:
+            e = json.loads(line)
+        except Exception:
+            continue
+        if e.get("type") in ("error", "turn.failed"):
+            out.append(json.dumps(e, ensure_ascii=False))
+    return "\n".join(out)
+
+
 def fatal_reason(*texts) -> str | None:
     blob = _strip_noise("\n".join(t for t in texts if t)).lower()
     for m in FATAL_MARKERS:
@@ -577,7 +592,8 @@ def process(item: dict) -> dict:
     base = {"elapsed_s": info["elapsed"], "usage": info["usage"] or None, "model": model}
     if info.get("aborted"):
         return {"status": "release", "error": "worker shutdown during session", **base}
-    fr = fatal_reason(info["stdout"], info["stderr"])
+    # A completed turn is never fatal; otherwise look only at codex's error events and stderr.
+    fr = None if (info["code"] == 0 and info["turn_ok"]) else fatal_reason(error_text(info["stdout"]), info["stderr"])
     if fr:
         return {"status": "fatal", "error": f"codex: {fr} — {run_dir}", **base}
     if info.get("stalled"):
