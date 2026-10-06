@@ -281,7 +281,7 @@ Wrapper를 거치지 않고 vLLM API에 직접 접근하는 방법.
 
 | Method | Path | 설명 |
 |---|---|---|
-| `GET` | `/health` | Chandra 헬스체크 |
+| `GET` | `/health` | Chandra 헬스체크 (vLLM) |
 | `GET` | `/v1/models` | 모델 목록 |
 | `POST` | `/v1/chat/completions` | 이미지→Markdown OCR |
 

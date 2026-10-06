@@ -8,6 +8,10 @@ PDF 파일을 받아 페이지별 OCR을 수행하고 결과를 반환하는 비
 현재 배포 서버는 `http://172.16.112.150:8080` (KOPRI 내부망 전용, 인증 없음).
 다른 컴퓨터에서 호출하는 방법과 주의사항은 [`ENDPOINTS.md` → 다른 컴퓨터에서 접속하기](./ENDPOINTS.md#다른-컴퓨터에서-접속하기) 참조.
 
+
+> `/health` 는 wrapper 가 아니라 nginx 가 **vLLM(chandra)** 으로 보내는 OCR 백엔드 헬스체크다(이름은 vLLM 이 정함, 클라이언트가 사용 중이라 유지).
+> 배포 확인은 `/healthz` 의 `version` 이 새 이미지 태그와 같은지로 한다.
+
 ---
 
 ## 엔드포인트 목록
@@ -19,6 +23,7 @@ PDF 파일을 받아 페이지별 OCR을 수행하고 결과를 반환하는 비
 | `GET` | `/ocr` | 전체 Job 목록 조회 (pages 제외) |
 | `GET` | `/api/stats` | Job 카운트 통계 |
 | `GET` | `/api/services` | 백엔드 헬스 + OCR backend 가용성/권장 동시성 |
+| `GET` | `/healthz` | wrapper 자신의 상태 — `{"status": "ok"\|"degraded"\|"unhealthy", "version", "role", "jobs", "figure_items": {상태: 수}}`. ok·degraded 200, unhealthy(DB 실패) 503. 형제 repo 와 같은 계약 |
 
 ---
 

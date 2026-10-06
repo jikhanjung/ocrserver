@@ -50,6 +50,12 @@ Current mode is visible in `/status` (mode chip) and at `_meta.mode` in
   (no `build:` field), so the deploy flow is: edit dev tree → build →
   bump tag in compose → `cp docker-compose.yml /srv/ocrserver/` →
   `docker compose up -d wrapper`.
+  **Bump `wrapper/version.py` together with the image tag** — `GET /healthz`
+  returns it, and the deploy is confirmed by `curl -s localhost:8080/healthz`
+  showing the new `version` with `status: ok`. (`/health` is vLLM's own
+  check, routed by nginx to chandra; clients use it, so it stays.) If
+  `nginx.*.conf` changed, copy them too and re-run the current `mode-*.sh`
+  (or `cp` + `nginx -s reload`).
 
 ### Where things are written down
 

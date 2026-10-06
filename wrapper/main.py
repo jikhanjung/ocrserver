@@ -13,6 +13,7 @@ import fitz
 import httpx
 import yaml
 import figures
+from version import VERSION
 from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -1014,6 +1015,44 @@ async def get_job(job_id: str):
 @app.get("/health")
 async def health():
     return {}
+
+
+# 형제 repo 들과 같은 계약의 상태 확인 (`/healthz`, devdocs guides/web/operations.md).
+# 공개 `/health` 는 nginx 가 vLLM(chandra) 으로 보내는 이름이라 바꾸지 않는다 — PaperMeister 등
+# 클라이언트가 OCR 백엔드 확인용으로 쓴다. `/healthz` 는 wrapper 자신(버전·DB)을 본다.
+#   ok        200 — 정상
+#   degraded  200 — DB 옆에 INTEGRITY_FAIL 표식(백업 무결성 검사가 손상을 발견). 서빙은 되고 있다.
+#   unhealthy 503 — DB 연결/쿼리 실패
+HEALTH_SENTINEL = "INTEGRITY_FAIL"
+
+
+@app.get("/healthz")
+async def healthz():
+    body = {"status": "ok", "version": VERSION, "role": WRAPPER_ROLE}
+    conn, db_path = (_llm_db, LLM_DB_PATH) if WRAPPER_ROLE == "llm" else (_db, DB_PATH)
+    try:
+        if conn is None:
+            raise RuntimeError("DB not open")
+        if WRAPPER_ROLE == "llm":
+            async with conn.execute("SELECT COUNT(*) FROM llm_requests") as cur:
+                body["llm_requests"] = (await cur.fetchone())[0]
+        else:
+            async with conn.execute("SELECT COUNT(*) FROM jobs") as cur:
+                body["jobs"] = (await cur.fetchone())[0]
+            async with conn.execute("SELECT status, COUNT(*) FROM figure_items GROUP BY status") as cur:
+                body["figure_items"] = {r[0]: r[1] for r in await cur.fetchall()}
+    except Exception as e:
+        body.update(status="unhealthy", error=str(e))
+        return Response(json.dumps(body, ensure_ascii=False), status_code=503, media_type="application/json")
+    sentinel = os.path.join(os.path.dirname(db_path), HEALTH_SENTINEL)
+    if os.path.exists(sentinel):
+        try:
+            with open(sentinel, encoding="utf-8") as f:
+                reason = f.readline().strip()
+        except OSError:
+            reason = ""
+        body.update(status="degraded", integrity=reason or "INTEGRITY_FAIL present")
+    return body
 
 
 # ── LLM read API (role=ocr, reads llmserver.db RO) ────────────────────────────

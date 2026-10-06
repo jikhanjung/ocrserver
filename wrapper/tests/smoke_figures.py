@@ -267,5 +267,8 @@ with TestClient(main.app) as c:
     ok(all(i["status"] in ("processing", "queued") for i in li["items"][:sum(1 for i in li["items"] if i["status"] in ("processing", "queued"))]), "active items first")
     ok(len(c.get("/api/figures/items?status=done,failed&kind=panels").json()["items"]) >= 5, "status/kind filters")
     ok(c.get("/api/stats").status_code == 200 and c.get("/health").status_code == 200, "OCR endpoints still fine")
+    hz = c.get("/healthz")
+    ok(hz.status_code == 200 and hz.json().get("status") == "ok" and hz.json().get("version") == main.VERSION
+       and "jobs" in hz.json(), "/healthz: status ok, version, jobs count")
 
 print(f"OK — {checks} checks passed")
