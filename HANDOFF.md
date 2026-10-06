@@ -1,4 +1,4 @@
-# HANDOFF — 2026-09-30 05:00 UTC (커널 7.0.0-34 재부팅 · 워커 0.3.9 한도 오탐 수정 · wrapper 0.3.9 · link 구간 형식 P03 도입됨)
+# HANDOFF — 2026-10-06 08:00 UTC (wrapper 0.3.10 `/healthz` · ocrserver.db 일일 로컬 백업 · 누적 panels 8.4k · link 2.3k)
 
 > **🟢 이 박스가 현재 상태의 전부다.**
 > - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 09-08
@@ -38,7 +38,10 @@
 >   panels 파일럿 6/6 통과. 워커 상태는 `/status` 카드·`GET /api/figures`·`journalctl -u ocrserver-figures-worker -f`.
 >   `.env`: `FIGURES_WORKER_TOKEN`, `FIGURES_MIN_INTERVAL=120`(09-18, 처음 300). nginx `/internal/` 은 loopback+172.18/16 만.
 >   OCR 경로 무변 (회귀 15/15). 스모크 56 checks. e2e 산출물은 `/srv/ocrserver/figure_ws/510ea212…/`(3.6MB, 7일 TTL).
-> - 이미지: `ocrwrapper:0.3.9`(09-30, link 요약이 구간 형식 `segs` 항목 수를 셈; 0.3.8 = 워커 여러 개·claim 원자화·일시정지 수정, devlog 048), `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
+> - 이미지: `ocrwrapper:0.3.10`(10-06, `GET /healthz` — 버전·DB·INTEGRITY_FAIL; 0.3.9 = link 요약이 `segs` 항목 수를 셈; 0.3.8 = 워커 여러 개·claim 원자화, devlog 048), `ocrserver:0.1.1`, `nginx:alpine`(1.29.8).
+>   **배포 확인은 `curl -s localhost:8080/healthz` 의 `version`·`status: ok`**. `wrapper/version.py` 를 이미지 태그와 함께 올릴 것(CLAUDE.md 배포 절차).
+> - **ocrserver.db 백업**: 하루 1회 로컬 1개 + 무결성 검사(`scripts/backup_db.py`, jikhanjung crontab 18:07 UTC) → `/mnt/disk1/backups/ocrserver/ocrserver_YYYYMMDD.sqlite3`,
+>   로그 `backup.log` 같은 폴더. 손상이면 `data/INTEGRITY_FAIL` → `/healthz` degraded. 오프사이트 없음(작업 큐·캐시라서, 사용자 결정).
 > - **호스트**: 09-29 20:52 UTC 재부팅(커널 7.0.0-31 → **7.0.0-34**, libc6). 드라이버 595.91.07 DKMS 정상, 코어 4·5 격리·kdump 재적용 확인,
 >   OCR 회귀 `kruskal1964.pdf` 15/15(82 s, 이전 두 회와 단어 유사도 기준선 안).
 > - **도판 워커 2개**: systemd `ocrserver-figures-worker@1`·`@2`(id `jikhanserver-1/-2`, 스크립트 **0.3.9**, 09-30 04:46 반영). 옛 단일 유닛은 disabled.
@@ -86,7 +89,24 @@
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-09-29 밤 ~ 09-30 — 재부팅 · link 출력 분석과 구간 형식 A/B · 한도 오탐)
+## 방금 한 작업 (2026-09-30 ~ 10-06 — GitHub 정리 · /healthz 배포 · DB 백업)
+
+- **gh 설치·로그인**(사용자, 09-30): `jikhanjung`, 프로토콜 ssh, 토큰 `~/.config/gh/hosts.yml`(평문, 600). billing·packages 조회 권한은 없음
+  (`gh auth refresh -s user` / `-s read:packages`).
+- **GitHub Actions 저장공간 정리**(09-30, 메일 "포함 저장공간 0.5 GB 소진"): 비공개 저장소 artifact 만 과금 — 원인은 TouchlineAnalyst
+  설치 파일 8.2 GB. TouchlineAnalyst 29개 삭제(1개 남김, 0.27 GB) + 보관 90 → 7일, Modan2(공개, 과금 무관) 836개 삭제 + 보관 → 14일.
+  Release 첨부는 별개 저장이라 무영향. TouchlineAnalyst 는 Release 가 없어 남은 artifact 1개가 유일한 배포본.
+- **10-01 00:28 docker 재시작**: 사용자의 `sudo apt update`(+업그레이드, docker 29.8.2) — 자동 업그레이드 아님. 컨테이너 자동 복구.
+- **link 구간 형식(P03) 운영 실측**: 09-30 03:44 배치 146/146 done, 실패·stall 0. 같은 논문 65편 예전 형식 대비 시간 69%·출력 56%,
+  시간 = 출력 모델(104 s + 34 s/1k)과 일치. 옛 형식에서 두 번 실패한 `79fa0b44` 16항목 전부 1회 완료. `d=` 14.5% 는 동상 표기 많은 두 논문에
+  몰린 정당한 사용(`b1a0017f` "same", `68553a9d` "»"). 항목을 잘게 나누면 고정비로 이득이 사라짐(`83355e51` 4 → 9항목, 시간 105%).
+- **wrapper 0.3.10**(10-06, 다른 세션의 `8b19499`·`fec01ba` pull 후 배포): `/healthz` + nginx 두 설정에 `location = /healthz`(정확 매칭,
+  `/health` 는 vLLM 그대로). version.py 0.3.10, 스모크 80, nginx -t(compose 네트워크) 통과, `mode-llm.sh` 재실행 — chandra·llm 무재시작.
+- **ocrserver.db 백업**(10-06, "반장" 세션 요청 → 사용자 결정으로 축소): 매시·오프사이트 대신 일일 로컬 1개 + 무결성 검사. 원본이 DELETE 저널이라
+  백업 중 wrapper 쓰기가 막힘(busy timeout 5 s) → NVMe 로 한 번에 복사해 잠금 3.4 s. 첫 스냅샷 10-06 07:44(2.13 GB, ok), 손상 시나리오 검증.
+  커밋 `631a5c6`, 라이브 스크립트 sudo cp 완료.
+
+## 이전 작업 (2026-09-29 밤 ~ 09-30 — 재부팅 · link 출력 분석과 구간 형식 A/B · 한도 오탐)
 
 - **재부팅** (09-29 20:52 UTC, 사용자): 커널 7.0.0-34. 드라이버·코어 격리·kdump·컨테이너·워커 2개 자동 복구, OCR 회귀 15/15.
   워커 2개로 panels 시간당 ~60–76건(1개 때 ~25).
@@ -921,6 +941,13 @@ llm          vllm/vllm-openai:latest       Exited
   3DGS) 는 `done_with_errors` 로 reconcile 됨. 사용자가 재업로드 필요.
 
 ## 곧 해야 할 작업
+
+**2026-10-06 추가:**
+
+- 첫 자동 백업(10-06 18:07 UTC) 확인: `/mnt/disk1/backups/ocrserver/backup.log` 에 `backup OK … 원본 잠금 N s`. 잠금이 5 s 에 가까워지면
+  (DB 가 커지면) wrapper 쓰기가 실패할 수 있다 — 그때는 ocrserver.db 를 WAL 로 바꾸는 wrapper 변경(llmserver.db 처럼)을 검토.
+- `/healthz` 는 이제 클라이언트·스모크의 배포 확인 기준. 배포 때 `wrapper/version.py` 를 빼먹지 말 것.
+- link 실패 10건(옛 형식 시절 stall)은 여전히 재제출 안 됨 — 구간 형식으로 다시 내면 통과할 가능성이 높다(PaperMeister 에 전달).
 
 **2026-09-30 추가:**
 
