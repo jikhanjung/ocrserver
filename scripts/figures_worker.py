@@ -49,7 +49,7 @@ import fitz
 import requests
 from PIL import Image, ImageDraw
 
-VERSION = "0.3.9"
+VERSION = "0.3.10"
 WRAPPER_URL = os.getenv("WRAPPER_URL", "http://127.0.0.1:8080").rstrip("/")
 TOKEN = os.getenv("FIGURES_WORKER_TOKEN", "")
 PDF_DIR = os.getenv("PDF_DIR", "/srv/ocrserver/data/pdfs")
@@ -227,20 +227,26 @@ def sweep_workspaces() -> int:
     removed = 0
     if not os.path.isdir(WS_DIR):
         return 0
+    # Several worker processes may sweep at once (all start together after a
+    # reboot or `enable --now @3 @4`): another sweeper can remove a dir between
+    # our listdir and rmdir, so every step tolerates it being gone.
     for fh in os.listdir(WS_DIR):
         top = os.path.join(WS_DIR, fh)
-        if not os.path.isdir(top):
-            continue
-        for sub in os.listdir(top):
-            d = os.path.join(top, sub)
-            try:
-                if os.path.isdir(d) and os.path.getmtime(d) < cutoff:
-                    shutil.rmtree(d, ignore_errors=True)
-                    removed += 1
-            except OSError:
-                pass
-        if not os.listdir(top):
-            os.rmdir(top)
+        try:
+            if not os.path.isdir(top):
+                continue
+            for sub in os.listdir(top):
+                d = os.path.join(top, sub)
+                try:
+                    if os.path.isdir(d) and os.path.getmtime(d) < cutoff:
+                        shutil.rmtree(d, ignore_errors=True)
+                        removed += 1
+                except OSError:
+                    pass
+            if not os.listdir(top):
+                os.rmdir(top)
+        except OSError:
+            pass
     if removed:
         log(f"workspace sweep: removed {removed} dir(s) older than {WS_TTL_DAYS}d")
     return removed
