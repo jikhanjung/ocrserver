@@ -44,6 +44,11 @@ HEARTBEAT_TIMEOUT = int(os.getenv("FIGURES_HEARTBEAT_TIMEOUT", "1800"))
 RESULT_TTL_DAYS = int(os.getenv("FIGURES_RESULT_TTL_DAYS", "30"))
 WORKSPACE_TTL_DAYS = int(os.getenv("FIGURES_WORKSPACE_TTL_DAYS", "7"))
 MAX_ITEMS_PER_JOB = int(os.getenv("FIGURES_MAX_ITEMS_PER_JOB", "500"))
+# How many workers may hold an item at once (0.3.11). The systemd units can all
+# stay enabled; the extra ones get no item from claim and just poll. The value
+# set through POST /figures/worker/limit is stored in figure_worker and wins;
+# this env is the default while none is stored. 0 = no limit.
+MAX_WORKERS = int(os.getenv("FIGURES_MAX_WORKERS", "0"))
 
 _db_getter = None
 _pdf_dir = "/data/pdfs"
@@ -167,6 +172,10 @@ async def db_init(db: aiosqlite.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_fjobs_client ON figure_jobs(client_id, submitted_at);
         CREATE INDEX IF NOT EXISTS idx_fcalls_at ON figure_calls(at);
     """)
+    async with db.execute("PRAGMA table_info(figure_worker)") as c:
+        cols = {r[1] for r in await c.fetchall()}
+    if "max_workers" not in cols:  # 0.3.11
+        await db.execute("ALTER TABLE figure_worker ADD COLUMN max_workers INTEGER")
     await db.execute(
         "INSERT OR IGNORE INTO figure_worker (id, state) VALUES (1, 'unknown')")
     await db.commit()
@@ -208,6 +217,11 @@ def _alive(last: float | None) -> bool:
     return bool(last and time.time() - last < max(180, MIN_INTERVAL + 60))
 
 
+def _max_workers(row: dict) -> int:
+    v = row.get("max_workers")
+    return MAX_WORKERS if v is None else int(v)
+
+
 def _worker_public(row: dict, procs: list | None = None) -> dict:
     """Aggregate over worker processes. The pause lives on the global row and
     wins; otherwise running > sleeping > idle over the processes still alive."""
@@ -237,6 +251,7 @@ def _worker_public(row: dict, procs: list | None = None) -> dict:
                      "next_call_at": p.get("next_call_at"), "last_seen": p.get("last_seen"),
                      "alive": _alive(p.get("last_seen"))} for p in procs],
         "min_interval_s": MIN_INTERVAL,
+        "max_workers": _max_workers(row),
     }
 
 
@@ -658,6 +673,21 @@ async def cancel_job(kind: str, job_id: str):
     return {"job_id": job_id, "cancelled": cur.rowcount, "status": (await _job_public(job_id, with_items=False))["status"]}
 
 
+@router.post("/figures/worker/limit")
+async def worker_limit(payload: dict):
+    """Set how many workers may hold an item at once: {"max_workers": N}.
+    0 = no limit, null = back to the FIGURES_MAX_WORKERS default. Lowering it
+    does not stop running sessions; the extra workers finish their item and
+    then get nothing from claim."""
+    n = payload.get("max_workers")
+    if n is not None and (not isinstance(n, int) or isinstance(n, bool) or n < 0):
+        raise HTTPException(status_code=400, detail="max_workers must be a non-negative integer or null")
+    db = _db()
+    await db.execute("UPDATE figure_worker SET max_workers=? WHERE id=1", (n,))
+    await db.commit()
+    return await _worker_view()
+
+
 @router.post("/figures/worker/resume")
 async def worker_resume():
     """Clear a fatal pause (login expired, usage limit). The operator fixes
@@ -707,6 +737,7 @@ async def api_figures():
         "last_error": ({"at": last_err[0], "kind": last_err[1], "status": last_err[2],
                         "error": last_err[3]} if last_err else None),
         "limits": {"min_interval_s": MIN_INTERVAL, "max_attempts": MAX_ATTEMPTS,
+                   "max_workers": _max_workers(await _worker_row()),
                    "heartbeat_timeout_s": HEARTBEAT_TIMEOUT},
     }
 
@@ -891,6 +922,17 @@ async def claim(payload: dict, x_worker_token: str | None = Header(None)):
         await db.commit()
         return {"item": None, "worker": await _worker_view(),
                 "min_interval_s": MIN_INTERVAL}
+    limit = _max_workers(row)
+    if limit:
+        async with db.execute(
+            "SELECT COUNT(DISTINCT claimed_by) FROM figure_items "
+            "WHERE status='processing' AND claimed_by IS NOT NULL AND claimed_by != ?",
+            (worker_id,)) as c:
+            busy = (await c.fetchone())[0]
+        if busy >= limit:
+            await db.commit()
+            return {"item": None, "worker": await _worker_view(),
+                    "min_interval_s": MIN_INTERVAL}
     # Pick and mark in a loop: with several worker processes two claims can pick
     # the same item between the SELECT and the UPDATE (0.3.7, seen at the first
     # two-worker start). The UPDATE only wins while the item is still queued.

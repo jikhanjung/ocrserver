@@ -226,6 +226,22 @@ with TestClient(main.app) as c:
         if g:
             c.post(f"/internal/figures/items/{g['item_id']}/release", headers=W, json={"reason": "test"})
 
+    # ── 0.3.11: max_workers caps how many workers hold an item at once ──
+    ok(c.post("/figures/worker/limit", json={"max_workers": -1}).status_code == 400, "limit rejects negative")
+    ok(c.post("/figures/worker/limit", json={"max_workers": "2"}).status_code == 400, "limit rejects non-int")
+    r = c.post("/figures/worker/limit", json={"max_workers": 1})
+    ok(r.status_code == 200 and r.json()["max_workers"] == 1, f"limit set {r.text}")
+    m1 = c.post("/internal/figures/claim", json={"worker_id": "m1"}, headers=W).json()["item"]
+    ok(m1 is not None, "first worker claims under limit 1")
+    ok(c.post("/internal/figures/claim", json={"worker_id": "m2"}, headers=W).json()["item"] is None, "second worker gets nothing at limit 1")
+    ok(c.get("/api/figures").json()["limits"]["max_workers"] == 1, "summary shows max_workers")
+    r = c.post("/figures/worker/limit", json={"max_workers": None})
+    ok(r.json()["max_workers"] == 0, "limit null → env default (0 = no limit)")
+    m2 = c.post("/internal/figures/claim", json={"worker_id": "m2"}, headers=W).json()["item"]
+    ok(m2 is not None and m2["item_id"] != m1["item_id"], "second worker claims once the limit is lifted")
+    for g in (m1, m2):
+        c.post(f"/internal/figures/items/{g['item_id']}/release", headers=W, json={"reason": "test"})
+
     # ── worker status + summary ──
     r = c.post("/internal/figures/worker/status", headers=W, json={"worker_id": "w1", "version": "0.3.0", "state": "sleeping", "next_call_at": 1})
     ok(r.json()["state"] == "sleeping", "worker status")
