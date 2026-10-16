@@ -25,6 +25,7 @@ services:
       FIGURES_MIN_INTERVAL: "${FIGURES_MIN_INTERVAL:-300}"
       FIGURES_HEARTBEAT_TIMEOUT: "${FIGURES_HEARTBEAT_TIMEOUT:-1800}"
       FIGURES_MAX_WORKERS: "${FIGURES_MAX_WORKERS:-0}"
+      FIGURES_RESULT_TTL_DAYS: "${FIGURES_RESULT_TTL_DAYS:-365}"
     volumes:
       - ./data:/data
       - ./docker-compose.yml:/etc/ocrserver-compose.yml:ro
