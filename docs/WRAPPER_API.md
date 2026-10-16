@@ -452,7 +452,7 @@ wrapper 는 접수·큐·결과 저장만 한다. 프롬프트와 결과 JSON �
 | `POST` | `/figures/{kind}/{job_id}/resume?retry_errors=` | 실패·예산 소진 항목 재큐. `retry_errors=true` 면 시도 횟수 초기화 |
 | `POST` | `/figures/{kind}/{job_id}/cancel` | 잡의 대기·처리 중 항목을 `cancelled` 로. 처리 중이던 세션은 워커가 다음 heartbeat(≤60 s)에서 끊는다. 멱등 |
 | `POST` | `/figures/worker/resume` | 치명 정지(로그인 만료·한도) 해제. 호스트에서 원인을 고친 뒤 호출 |
-| `POST` | `/figures/worker/limit` | `{"max_workers": N}` — 동시에 항목을 잡는 워커 수 상한 (0.3.11). `0`=무제한, `null`=`FIGURES_MAX_WORKERS` 기본값. 넘는 워커는 claim 에서 빈 응답을 받고 대기만 한다. 값은 DB 에 남아 재시작 뒤에도 유지 |
+| `POST` | `/figures/worker/limit` | `{"max_workers": N, "min_interval_s": S}` — 동시에 항목을 잡는 워커 수 상한(0.3.11)과 워커별 호출 간격(0.3.12). 보낸 키만 바뀌고 `null`=env 기본값(`FIGURES_MAX_WORKERS`/`FIGURES_MIN_INTERVAL`). `max_workers` `0`=무제한. 넘는 워커는 claim 에서 빈 응답을 받고 대기만 한다(상한 검사는 claim UPDATE 안에서 원자적, 0.3.13). 값은 DB 에 남아 재시작 뒤에도 유지 |
 | `GET` | `/api/figures` | 대시보드 요약 (워커 상태·큐·24h 호출·마지막 오류) |
 | `GET` | `/api/figures/items?status=&kind=&client_id=&limit=` | 항목 목록 — 진행·대기 먼저, 그다음 최근 완료 순. 항목마다 쪽수·시도·경과·토큰·결과 요약(link: 도판/항목/skipped, panels: 패널 수, detect: 도판/dismiss)·오류 |
 | `GET` | `/figures` | **큐 페이지** (HTML, 30초 자동 갱신) — 워커 상태, 진행/대기/완료 수, 편당 평균과 남은 시간 추정, 항목 표 |

@@ -241,6 +241,25 @@ with TestClient(main.app) as c:
     ok(m2 is not None and m2["item_id"] != m1["item_id"], "second worker claims once the limit is lifted")
     for g in (m1, m2):
         c.post(f"/internal/figures/items/{g['item_id']}/release", headers=W, json={"reason": "test"})
+    # concurrent claims must not overshoot the limit (race seen at the 0.3.12 deploy)
+    c.post("/figures/worker/limit", json={"max_workers": 2})
+    with ThreadPoolExecutor(6) as ex:
+        got = list(ex.map(lambda k: c.post("/internal/figures/claim", json={"worker_id": f"q{k}"}, headers=W).json()["item"], range(6)))
+    held = [g for g in got if g]
+    ok(1 <= len(held) <= 2, f"parallel claims respect max_workers 2 ({len(held)} claimed)")
+    for g in held:
+        c.post(f"/internal/figures/items/{g['item_id']}/release", headers=W, json={"reason": "test"})
+    c.post("/figures/worker/limit", json={"max_workers": None})
+    # ── 0.3.12: min_interval_s changes at runtime, only the keys sent change ──
+    r = c.post("/figures/worker/limit", json={"min_interval_s": 90})
+    ok(r.json()["min_interval_s"] == 90 and r.json()["max_workers"] == 0, f"interval set alone {r.text}")
+    ci = c.post("/internal/figures/claim", json={"worker_id": "m3"}, headers=W).json()
+    ok(ci["min_interval_s"] == 90, "claim carries the stored interval")
+    if ci["item"]:
+        c.post(f"/internal/figures/items/{ci['item']['item_id']}/release", headers=W, json={"reason": "test"})
+    ok(c.post("/figures/worker/limit", json={"min_interval_s": 1.5}).status_code == 400, "interval rejects non-int")
+    r = c.post("/figures/worker/limit", json={"min_interval_s": None})
+    ok(r.json()["min_interval_s"] == 300, "interval null → env default")
 
     # ── worker status + summary ──
     r = c.post("/internal/figures/worker/status", headers=W, json={"worker_id": "w1", "version": "0.3.0", "state": "sleeping", "next_call_at": 1})

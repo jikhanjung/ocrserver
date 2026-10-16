@@ -176,6 +176,8 @@ async def db_init(db: aiosqlite.Connection) -> None:
         cols = {r[1] for r in await c.fetchall()}
     if "max_workers" not in cols:  # 0.3.11
         await db.execute("ALTER TABLE figure_worker ADD COLUMN max_workers INTEGER")
+    if "min_interval_s" not in cols:  # 0.3.12
+        await db.execute("ALTER TABLE figure_worker ADD COLUMN min_interval_s INTEGER")
     await db.execute(
         "INSERT OR IGNORE INTO figure_worker (id, state) VALUES (1, 'unknown')")
     await db.commit()
@@ -213,8 +215,16 @@ async def _worker_row() -> dict:
     return dict(row) if row else {"state": "unknown"}
 
 
-def _alive(last: float | None) -> bool:
-    return bool(last and time.time() - last < max(180, MIN_INTERVAL + 60))
+def _alive(last: float | None, interval: int = MIN_INTERVAL) -> bool:
+    return bool(last and time.time() - last < max(180, interval + 60))
+
+
+def _min_interval(row: dict) -> int:
+    """Pause between calls per worker. A value stored through POST
+    /figures/worker/limit (0.3.12) wins over FIGURES_MIN_INTERVAL, so pacing
+    changes need no wrapper restart. Workers pick it up from their next claim."""
+    v = row.get("min_interval_s")
+    return MIN_INTERVAL if v is None else int(v)
 
 
 def _max_workers(row: dict) -> int:
@@ -226,7 +236,8 @@ def _worker_public(row: dict, procs: list | None = None) -> dict:
     """Aggregate over worker processes. The pause lives on the global row and
     wins; otherwise running > sleeping > idle over the processes still alive."""
     procs = procs or []
-    live = [p for p in procs if _alive(p.get("last_seen"))]
+    interval = _min_interval(row)
+    live = [p for p in procs if _alive(p.get("last_seen"), interval)]
     last = max([row.get("last_seen") or 0] + [p.get("last_seen") or 0 for p in procs]) or None
     if row.get("state") == "paused":
         state = "paused"
@@ -244,13 +255,13 @@ def _worker_public(row: dict, procs: list | None = None) -> dict:
         "paused_at": row.get("paused_at"),
         "next_call_at": min(sleeping) if sleeping else (row.get("next_call_at") if not live else None),
         "last_seen": last,
-        "alive": _alive(last),
+        "alive": _alive(last, interval),
         "alive_count": len(live),
         "running_count": sum(1 for p in live if p.get("state") == "running"),
         "workers": [{"worker_id": p["worker_id"], "version": p.get("version"), "state": p.get("state"),
                      "next_call_at": p.get("next_call_at"), "last_seen": p.get("last_seen"),
-                     "alive": _alive(p.get("last_seen"))} for p in procs],
-        "min_interval_s": MIN_INTERVAL,
+                     "alive": _alive(p.get("last_seen"), interval)} for p in procs],
+        "min_interval_s": interval,
         "max_workers": _max_workers(row),
     }
 
@@ -675,15 +686,20 @@ async def cancel_job(kind: str, job_id: str):
 
 @router.post("/figures/worker/limit")
 async def worker_limit(payload: dict):
-    """Set how many workers may hold an item at once: {"max_workers": N}.
-    0 = no limit, null = back to the FIGURES_MAX_WORKERS default. Lowering it
-    does not stop running sessions; the extra workers finish their item and
-    then get nothing from claim."""
-    n = payload.get("max_workers")
-    if n is not None and (not isinstance(n, int) or isinstance(n, bool) or n < 0):
-        raise HTTPException(status_code=400, detail="max_workers must be a non-negative integer or null")
+    """Set how many workers may hold an item at once ({"max_workers": N}) and/or
+    the pause between calls per worker ({"min_interval_s": S}, 0.3.12). Only the
+    keys present change; null puts that one back to its env default
+    (FIGURES_MAX_WORKERS / FIGURES_MIN_INTERVAL). max_workers 0 = no limit.
+    Lowering it does not stop running sessions; the extra workers finish their
+    item and then get nothing from claim."""
     db = _db()
-    await db.execute("UPDATE figure_worker SET max_workers=? WHERE id=1", (n,))
+    for key in ("max_workers", "min_interval_s"):
+        if key not in payload:
+            continue
+        n = payload[key]
+        if n is not None and (not isinstance(n, int) or isinstance(n, bool) or n < 0):
+            raise HTTPException(status_code=400, detail=f"{key} must be a non-negative integer or null")
+        await db.execute(f"UPDATE figure_worker SET {key}=? WHERE id=1", (n,))
     await db.commit()
     return await _worker_view()
 
@@ -736,7 +752,7 @@ async def api_figures():
                       "avg_elapsed_s": round(avg, 1) if avg else None},
         "last_error": ({"at": last_err[0], "kind": last_err[1], "status": last_err[2],
                         "error": last_err[3]} if last_err else None),
-        "limits": {"min_interval_s": MIN_INTERVAL, "max_attempts": MAX_ATTEMPTS,
+        "limits": {"min_interval_s": _min_interval(await _worker_row()), "max_attempts": MAX_ATTEMPTS,
                    "max_workers": _max_workers(await _worker_row()),
                    "heartbeat_timeout_s": HEARTBEAT_TIMEOUT},
     }
@@ -843,7 +859,7 @@ async def api_figure_items(
         "SELECT kind, AVG(elapsed_s), COUNT(*) FROM figure_items WHERE status='done' "
         "AND completed_at >= ? GROUP BY kind", (time.time() - 86400,)) as c:
         avg = {k: {"avg_elapsed_s": round(a or 0), "n": n} for k, a, n in await c.fetchall()}
-    return {"items": items, "avg_24h": avg, "min_interval_s": MIN_INTERVAL,
+    return {"items": items, "avg_24h": avg, "min_interval_s": _min_interval(await _worker_row()),
             "worker": await _worker_view()}
 
 
@@ -916,23 +932,17 @@ async def claim(payload: dict, x_worker_token: str | None = Header(None)):
     now = time.time()
     await _requeue_stale()
     row = await _worker_row()
+    interval = _min_interval(row)
     await db.execute("UPDATE figure_worker SET worker_id=?, last_seen=? WHERE id=1", (worker_id, now))
     await _touch_proc(worker_id)
     if row.get("state") == "paused":
         await db.commit()
         return {"item": None, "worker": await _worker_view(),
-                "min_interval_s": MIN_INTERVAL}
-    limit = _max_workers(row)
-    if limit:
-        async with db.execute(
-            "SELECT COUNT(DISTINCT claimed_by) FROM figure_items "
-            "WHERE status='processing' AND claimed_by IS NOT NULL AND claimed_by != ?",
-            (worker_id,)) as c:
-            busy = (await c.fetchone())[0]
-        if busy >= limit:
-            await db.commit()
-            return {"item": None, "worker": await _worker_view(),
-                    "min_interval_s": MIN_INTERVAL}
+                "min_interval_s": interval}
+    # max_workers (0.3.11) is checked inside the claiming UPDATE itself: a
+    # separate SELECT let several concurrent claims pass the check together
+    # (limit 5, 9 claimed at the 0.3.12 deploy).
+    limit = _max_workers(row) or -1
     # Pick and mark in a loop: with several worker processes two claims can pick
     # the same item between the SELECT and the UPDATE (0.3.7, seen at the first
     # two-worker start). The UPDATE only wins while the item is still queued.
@@ -942,18 +952,20 @@ async def claim(payload: dict, x_worker_token: str | None = Header(None)):
             break
         cur = await db.execute(
             "UPDATE figure_items SET status='processing', attempts=attempts+1, claimed_by=?, "
-            "claimed_at=?, heartbeat_at=? WHERE item_id=? AND status='queued'",
-            (worker_id, now, now, item["item_id"]))
+            "claimed_at=?, heartbeat_at=? WHERE item_id=? AND status='queued' AND (? < 0 OR ("
+            "  SELECT COUNT(DISTINCT claimed_by) FROM figure_items WHERE status='processing' "
+            "  AND claimed_by IS NOT NULL AND claimed_by != ?) < ?)",
+            (worker_id, now, now, item["item_id"], limit, worker_id, limit))
         if cur.rowcount:
             break
         item = None
     if item is None:
         await db.commit()
         return {"item": None, "worker": await _worker_view(),
-                "min_interval_s": MIN_INTERVAL}
+                "min_interval_s": interval}
     await _refresh_job_status(item["job_id"])
     await db.commit()
-    return _claim_payload(item) | {"worker": await _worker_view(), "min_interval_s": MIN_INTERVAL}
+    return _claim_payload(item) | {"worker": await _worker_view(), "min_interval_s": interval}
 
 
 async def _pick_queued() -> dict | None:
