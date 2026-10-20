@@ -22,8 +22,10 @@
 > - **ocrserver.db 는 0.3.14 부터 WAL.** 이전(delete 저널)에는 긴 읽기가 wrapper 쓰기를 막았다(10-18 03:57 제 2분 쿼리 → 워커 500 18건). 큰 집계는 그래도 일일 백업에서 한다.
 > - 일일 백업 잠금 5.9 s(10-19, busy timeout 5 s 초과)는 WAL 로 해소될 것이다 — 10-20 18:07 회차가 컨테이너 실행·WAL 첫 회.
 > - **규칙 (사용자, 10-20): 호스트 프로세스는 컨테이너가 연 DB 파일(ocrserver.db·llmserver.db·metrics.db)을 ro 라도 열지 않는다.**
->   조회는 `docker exec -i ocrserver-wrapper-1 python3 -` 로 한다. 일일 백업은 `scripts/backup_db.sh` 가 wrapper 이미지 one-shot 컨테이너에서
->   `backup_db.py` 를 돌린다(`--network none`, /data·/stage·/backup 마운트). 백업 스냅샷 파일은 라이브 DB 가 아니라 호스트에서 읽어도 된다.
+>   조회는 `docker exec -i ocrserver-wrapper-1 python3 -` 로 한다. 일일 백업은 `scripts/backup_db.sh` 가 **wrapper 컨테이너 안에서**
+>   `backup_db.py` 를 돌린다(`docker exec`, compose 가 wrapper 에 `./backup_stage:/stage`·`/mnt/disk1/backups/ocrserver:/backup` 마운트, 10-20).
+>   `/backup` 이 원본과 같은 장치면(디스크 미마운트로 컨테이너가 생성됨) 중단한다. 백업 스냅샷 파일은 라이브 DB 가 아니라 호스트에서 읽어도 된다.
+>   10-20 08:10 수동 1회: 2.96 GB, 전체 9.5 s, integrity ok, 워커 오류 0(WAL).
 > - 배포 규칙·호스트 상태는 아래 10-06 박스 그대로다(코어 4·5 격리, `--no-deps`, nginx `cp`).
 
 > **(이전 박스, 2026-10-06)**

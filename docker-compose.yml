@@ -29,6 +29,10 @@ services:
     volumes:
       - ./data:/data
       - ./docker-compose.yml:/etc/ocrserver-compose.yml:ro
+      # 일일 백업(scripts/backup_db.sh → docker exec)용 — 호스트는 라이브 DB 를 열지 않는다.
+      # /backup 이 원본과 같은 디스크면(/mnt/disk1 미마운트 상태로 컨테이너가 생성됨) backup_db.py 가 중단한다.
+      - ./backup_stage:/stage
+      - /mnt/disk1/backups/ocrserver:/backup
     depends_on:
       - chandra-a
     restart: unless-stopped

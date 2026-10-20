@@ -17,9 +17,9 @@ heartbeat 가 "database is locked" 로 실패할 수 있어, **NVMe(STAGE_DIR)�
 2026-10-06) 검사·HDD 이동은 잠금이 풀린 뒤에 한다. 단계를 나눠 복사하면 원본이 바뀔 때마다 처음부터 다시 시작해
 도판 워커의 잦은 쓰기 아래서 끝나지 않는다. 근본 해결은 원본을 WAL 로 바꾸는 것(wrapper 변경).
 
-실행: **호스트에서 직접 돌리지 않는다** — 호스트 프로세스는 컨테이너가 연 DB 파일을 (ro 라도) 열지 않는다(2026-10-20 사용자 결정,
-WAL 전환 준비). `backup_db.sh` 가 운영 wrapper 이미지로 one-shot 컨테이너를 띄워 이 스크립트를 실행한다(경로는 아래 환경 변수로
-컨테이너 안 경로로 바뀐다). jikhanjung 의 crontab, 매일 18:07 UTC(03:07 KST):
+실행: **호스트에서 직접 돌리지 않는다** — 호스트 프로세스는 컨테이너가 연 DB 파일을 (ro 라도) 열지 않는다(2026-10-20 사용자 결정).
+`backup_db.sh` 가 이 스크립트를 wrapper 컨테이너 안에서 실행한다(`docker exec`, 경로는 아래 환경 변수로 컨테이너 안 경로
+/data·/stage·/backup 으로 바뀐다 — compose 가 wrapper 에 두 폴더를 마운트). jikhanjung 의 crontab, 매일 18:07 UTC(03:07 KST):
     7 18 * * * /srv/ocrserver/scripts/backup_db.sh >> /mnt/disk1/backups/ocrserver/backup.log 2>&1
 
 복원: `docker compose stop wrapper` → 스냅샷을 data/ocrserver.db 로 복사(원본이 root 소유라 one-shot 컨테이너로,
@@ -57,6 +57,11 @@ def free_gb(path: Path) -> float:
 def check_space() -> bool:
     if not os.path.ismount(DISK):
         log(f'ABORT: {DISK} 가 마운트되지 않음 — 루트 디스크를 채우지 않도록 건너뜀')
+        return False
+    # 컨테이너 안에선 /backup 바인드가 늘 마운트 지점이라 위 검사가 통과한다. 컨테이너가 /mnt/disk1 미마운트 상태로
+    # 만들어졌으면 /backup 은 루트 디스크의 빈 폴더다 → 원본과 같은 장치면 중단한다.
+    if os.stat(DISK).st_dev == os.stat(SOURCE.parent).st_dev:
+        log(f'ABORT: {DISK} 가 원본({SOURCE.parent})과 같은 디스크 — 보관 디스크가 연결되지 않음, 건너뜀')
         return False
     need = SOURCE.stat().st_size / 1024 ** 3 + MIN_FREE_GB
     for d in (STAGE_DIR, BACKUP_DIR):
