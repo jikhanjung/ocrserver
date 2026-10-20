@@ -1,6 +1,33 @@
-# HANDOFF — 2026-10-06 08:00 UTC (wrapper 0.3.10 `/healthz` · ocrserver.db 일일 로컬 백업 · 누적 panels 8.4k · link 2.3k)
+# HANDOFF — 2026-10-20 08:10 UTC (wrapper 0.3.14 ocrserver.db WAL · metrics 를 wrapper 가 기록 · 호스트 DB 접근 제거 · codex 한도 75% 정책)
 
-> **🟢 이 박스가 현재 상태의 전부다.**
+> **🟢 이 박스가 현재 상태의 전부다 (2026-10-20).**
+> - **GPU 는 둘 다 figsplit 학습 중** (`~/projects/figsplit`, 도판→패널 로컬 모델). `chandra-a`·`llm` **정지** — 컨테이너는 wrapper·llmwrapper·nginx 만.
+>   `/healthz` 는 ok 이고, chandra `/health` 502 는 의도된 상태다. OCR+LLM 복구는 **사용자가 요청할 때만** 한다(`mode-llm.sh`).
+> - **이미지**: `ocrwrapper:0.3.14`(10-20 08:03 배포, Hub push, digest `6f47af06…`), 워커 스크립트 `figures_worker.py` 0.3.10. 확인은 `curl -s localhost:8080/healthz`.
+>   0.3.14: **ocrserver.db 를 WAL 로 전환**(시작 때 PRAGMA, 파일에 남음), `POST /internal/metrics`(수집기 → wrapper 가 metrics.db 에 기록),
+>   **metrics.db 연도별 분리**(새해 첫 줄이 오면 전년도를 `metrics_YYYY.db` 로 보관하고 새로 시작, 조회 때 전년도를 ro ATTACH). 보관 정리는 하지 않는다(10년 ≈ 330 MB, 사용자 결정).
+> - **도판 워커 10개**: systemd `ocrserver-figures-worker@1`…`@10` 모두 enabled·active. 동시 실행 수는 sudo 없이 런타임으로 조절한다.
+>   `curl -X POST localhost:8080/figures/worker/limit -H 'Content-Type: application/json' -d '{"max_workers":N,"min_interval_s":S}'`
+>   (0.3.11 상한, 0.3.12 간격, 0.3.13 상한 검사 원자화). **간격 S 는 워커마다 자기 항목 뒤에 쉬는 시간**이다.
+>   10개가 살아 있으면 시간당 처리 ≈ 10×3600/(elapsed+S) 이다. 지금 쉬는 워커는 깨어난 뒤에야 새 S 를 따른다. S 상한 3600.
+>   `.env` 기본값: `FIGURES_MIN_INTERVAL=10`, `FIGURES_HEARTBEAT_TIMEOUT=4200`. compose 기본값: `FIGURES_MAX_WORKERS=0`(무제한), `FIGURES_RESULT_TTL_DAYS=365`.
+> - **큐 처리 순서** (`wrapper/figures.py` `_pick_queued`): 클라이언트 사이에서는 공평하게 돌고, 한 클라이언트 안에서는 **먼저 제출된 작업부터** 처리한다
+>   (link 를 먼저 처리하지 않는다).
+> - **codex 주간 한도 ≈ $1,300 상당 = 100%.** 비용은 link ≈ $0.3–0.5/항목(~150 s), panels ≈ $0.08–0.17/항목(~80 s).
+>   **사용자 정책 (10-20 개정)**: 사용량 **75%까지 빠른 모드**(max_workers 5, S 10) → 75% 부터 느린 모드(max_workers 1).
+>   느린 모드에서는 S 를 정해서 총 소진율 ≈ (100−used)/남은 시간 × 0.9 가 되게 맞춘다.
+>   리셋이 감지되면(resets_at 변경 또는 used 급락) 빠른 모드로 돌아간다. 한도는 **예고 없이 일찍 리셋된다**: 10-17 20:40 과 10-20 06:32, 두 번 다 58%에서 리셋됐다.
+>   현재 창은 **10-27 06:32 UTC 까지**(resets_at 1793082737)이고, 10-20 07:00 부터 빠른 모드다.
+>   세션 cron(매시 정시 리포트, scratchpad `report.sh`)이 이 정책을 돌린다. 세션 전용이라 세션이 닫히면 멈춘다.
+> - **ocrserver.db 는 0.3.14 부터 WAL.** 이전(delete 저널)에는 긴 읽기가 wrapper 쓰기를 막았다(10-18 03:57 제 2분 쿼리 → 워커 500 18건). 큰 집계는 그래도 일일 백업에서 한다.
+> - 일일 백업 잠금 5.9 s(10-19, busy timeout 5 s 초과)는 WAL 로 해소될 것이다 — 10-20 18:07 회차가 컨테이너 실행·WAL 첫 회.
+> - **규칙 (사용자, 10-20): 호스트 프로세스는 컨테이너가 연 DB 파일(ocrserver.db·llmserver.db·metrics.db)을 ro 라도 열지 않는다.**
+>   조회는 `docker exec -i ocrserver-wrapper-1 python3 -` 로 한다. 일일 백업은 `scripts/backup_db.sh` 가 wrapper 이미지 one-shot 컨테이너에서
+>   `backup_db.py` 를 돌린다(`--network none`, /data·/stage·/backup 마운트). 백업 스냅샷 파일은 라이브 DB 가 아니라 호스트에서 읽어도 된다.
+> - 배포 규칙·호스트 상태는 아래 10-06 박스 그대로다(코어 4·5 격리, `--no-deps`, nginx `cp`).
+
+> **(이전 박스, 2026-10-06)**
+> 
 > - **호스트**: 코어 4·5 격리(07-29) 이후 **MCE 패닉 0건** 유지. 09-08
 >   03:51 UTC 정상 재부팅 이후 연속 가동.
 > - **모드**: **OCR×1 + LLM** (`llm+ocr`), 09-14 09:30 UTC `mode-llm.sh` 로 전환.
@@ -89,7 +116,27 @@
 
 이 파일은 작업 인수인계용. 작업 단위로 갱신.
 
-## 방금 한 작업 (2026-09-30 ~ 10-06 — GitHub 정리 · /healthz 배포 · DB 백업)
+## 방금 한 작업 (2026-10-08 ~ 10-20 — 워커 10개 · 상한/간격 API · 한도 페이싱 · figsplit)
+
+- **figures_worker 0.3.10**(10-08, `2d48c1d`): 워커 여럿이 함께 시작할 때 서로 지운 폴더 때문에 나던 FileNotFoundError 를 고쳤다.
+  sweep_workspaces 가 동시에 돌아도 되게 했다. 워커를 `@1`…`@10` 으로 늘렸다.
+- **wrapper 0.3.11–0.3.13**(10-16, `86b19b0`·`5af3c35`): `POST /figures/worker/limit` 을 추가했다. `max_workers` 로 동시 실행 상한을,
+  `min_interval_s` 로 간격을 런타임에 바꾼다. claim 할 때 상한을 원자적으로 검사한다. 이제 워커 수를 바꾸는 데 sudo 가 필요 없다.
+- **결과 TTL 365일**(10-16, `d63f154`): 도판 결과 보관 기간을 1년으로 늘렸다. figsplit 이 panels 답과 PDF 를 학습 말뭉치로 쓴다.
+- **codex 한도 페이싱 운영**(10-16 ~ 10-20, 세션 cron): 처음 정책은 50%까지 빠른 모드, 이후 느린 모드였다.
+  - 느린 모드에서 총 소진율을 0.32–0.34%/h 로 유지했다.
+  - link 는 S=3600 에서도 시간당 ~10건 ≈ $4/h 라, 이 방법으로는 더 낮출 수 없다.
+  - panels 는 S 700–1400 이면 $3/h 안팎이다.
+  - 그런데 리셋이 두 번 다 58%에서 일찍 와서 아껴 둔 한도를 잃었다 → 10-20 사용자가 전환 기준을 **75%** 로 올렸다.
+- **DB 잠금 사고**(10-18 03:57–03:59): 제가 라이브 DB 에 돌린 2분짜리 집계 쿼리 때문에 워커 500 이 18건 났다.
+  스스로 회복했고, 고아 claim 2건은 05:08 stale requeue 로 다시 큐에 들어갔다. 교훈은 위 박스에 적었다.
+- **figsplit 지원**: 사용자 요청으로 말뭉치 v2 질의에 답했다.
+  - panels 완료 누적 34,937 (prompt `panels-v1-e3892d3aaa02`). PDF 9,699편 중 panels 있음 5,757, link 만 있음 1,288, link 없음 2,736.
+  - 말뭉치는 10-18 18:07 백업을 쓰도록 권했다. ocrserver DB 쓰기는 figsplit 에서 하지 않는다.
+- **smo**(scoremate-omr): A-v3 학습 결과를 전달받았다(90k 배포, 실스캔 0.942). ocrserver 와는 무관하다(OMR 은 여기서 돌지 않음).
+- `~/.local/bin/claude-restart-all` 설치(10-20, "반장" 세션 요청 + 사용자 승인): tmux 의 idle claude 를 업데이트하고 재시작하는 스크립트다.
+
+## 이전 작업 (2026-09-30 ~ 10-06 — GitHub 정리 · /healthz 배포 · DB 백업)
 
 - **gh 설치·로그인**(사용자, 09-30): `jikhanjung`, 프로토콜 ssh, 토큰 `~/.config/gh/hosts.yml`(평문, 600). billing·packages 조회 권한은 없음
   (`gh auth refresh -s user` / `-s read:packages`).
@@ -941,6 +988,24 @@ llm          vllm/vllm-openai:latest       Exited
   3DGS) 는 `done_with_errors` 로 reconcile 됨. 사용자가 재업로드 필요.
 
 ## 곧 해야 할 작업
+
+**2026-10-20 추가:**
+
+- **한도 75% 전환**: 빠른 모드는 시간당 ~2.3%라 75%까지 ~33 h, 10-21 16:00 UTC 전후로 예상한다.
+  70%를 넘으면 5분 간격 감시(scratchpad `watch50.sh` 방식)를 띄워 넘치지 않게 전환한다. 세션 cron(a8edd8a6)은 10-27 에 만료된다.
+- **link 느린 모드 한계**: S=3600 에서도 시간당 ~$4 다. 더 낮추려면 둘 중 하나다(사용자 결정 대기).
+  (a) `sudo systemctl stop ocrserver-figures-worker@{2..10}` (사용자 실행), (b) wrapper 에 전체(워커 공통) 간격을 추가한다.
+- **10-20 18:07 백업 확인**: 컨테이너 실행(`backup_db.sh`)·WAL 첫 회. `backup.log` 에 `backup OK` 와 그 시각 워커 500 이 없는지 본다.
+- **WAL 파일 크기**: 배포 직후 `ocrserver.db-wal` 260 MB(시작 때 cleanup 이 workspace 행 2,647개를 지운 큰 트랜잭션). 체크포인트 뒤에도 파일은 줄지 않고 재사용된다 — 계속 커지면 확인.
+- **호스트 DB 접근 제거 마무리** (규칙은 위 박스):
+  - ✅ `backup_db.py`·`backup_db.sh` 라이브 반영(사용자 sudo cp), crontab 을 `backup_db.sh` 로 교체(10-20 07:50).
+  - ✅ figsplit: 라이브 DB 를 열지 않게 바꿨다(figsplit `9b60a6d`, 10-20). `ocrserver_ro()` 는 라이브 경로를 거부하고,
+    `snapshot.py` 는 최신 일일 백업만 읽어 자기 `snapshots/` 에 gzip JSONL 로 복사한다(`--live` 제거).
+  - ✅ `metrics.db`: 수집기는 호스트에서 모아 `POST /internal/metrics` 로 보내고 DB 는 wrapper 만 연다(0.3.14, 방식 A 사용자 결정).
+    유닛 `ocrserver-metrics.service` 는 `--db` 제거·`User=jikhanjung`. 라이브 반영은 사용자 sudo cp + daemon-reload.
+  - `backfill_hashes.py` 는 일회성 도구(기본 `--db /data/...`, 컨테이너 경로)라 호스트에서 돌리지 않으면 된다.
+- **OCR+LLM 복구**: figsplit 학습이 끝나고 사용자가 요청하면 `mode-llm.sh`(chandra-a + llm)로 복구하고 OCR 회귀 `kruskal1964.pdf` 15/15 를 확인한다.
+
 
 **2026-10-06 추가:**
 

@@ -1,38 +1,24 @@
 #!/usr/bin/env python3
 """Single-shot host metrics collector.
 
-Reads load average, memory usage and per-GPU stats, then appends one row
-to ``metrics.db`` (SQLite). Designed to be fired by a systemd timer once
-per minute. Self-contained — only stdlib + nvidia-smi.
+Reads load average, memory usage and per-GPU stats, then POSTs one row to
+the wrapper (``/internal/metrics``), which stores it in ``metrics.db``.
+The host never opens that DB file itself (user rule 2026-10-20 — host
+processes don't open SQLite files a container has open). Designed to be
+fired by a systemd timer once per minute. Self-contained — only stdlib +
+nvidia-smi. If the wrapper is down, that minute's row is dropped.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
-import sqlite3
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS metrics (
-    ts               INTEGER PRIMARY KEY,
-    load1            REAL,
-    load5            REAL,
-    load15           REAL,
-    mem_used_mb      INTEGER,
-    mem_total_mb     INTEGER,
-    gpu0_util        REAL,
-    gpu0_temp        REAL,
-    gpu0_mem_used_mb INTEGER,
-    gpu0_mem_total_mb INTEGER,
-    gpu1_util        REAL,
-    gpu1_temp        REAL,
-    gpu1_mem_used_mb INTEGER,
-    gpu1_mem_total_mb INTEGER
-);
-"""
 
 COLS = [
     "ts", "load1", "load5", "load15", "mem_used_mb", "mem_total_mb",
@@ -111,33 +97,29 @@ def collect() -> dict:
     }
 
 
-def write_row(db_path: Path, row: dict) -> None:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), timeout=10)
-    try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.executescript(SCHEMA)
-        placeholders = ",".join("?" for _ in COLS)
-        conn.execute(
-            f"INSERT OR REPLACE INTO metrics ({','.join(COLS)}) VALUES ({placeholders})",
-            [row[c] for c in COLS],
-        )
-        conn.commit()
-    finally:
-        conn.close()
+def post_row(url: str, row: dict) -> None:
+    req = urllib.request.Request(
+        url, data=json.dumps(row).encode(), method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        r.read()
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default=os.environ.get(
-        "METRICS_DB", "/srv/ocrserver/data/metrics.db"))
+    ap.add_argument("--url", default=os.environ.get(
+        "METRICS_URL", "http://127.0.0.1:8080/internal/metrics"))
     ap.add_argument("--print", action="store_true",
                     help="print collected row to stdout (for debugging)")
     args = ap.parse_args()
 
     row = collect()
-    write_row(Path(args.db), row)
+    try:
+        post_row(args.url, row)
+    except (urllib.error.URLError, OSError) as e:
+        print(f"[metrics] POST {args.url} failed: {e}", file=sys.stderr)
+        return 1
     if args.print:
         for k in COLS:
             print(f"{k}={row[k]}")

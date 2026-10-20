@@ -4,9 +4,10 @@ Wants=ocrserver-metrics.timer
 
 [Service]
 Type=oneshot
-# /srv/ocrserver/data is the bind-mounted DB dir for the wrapper container.
-# Running as root keeps it simple — nvidia-smi works for any user, but the
-# data dir is root-owned on the live deploy.
-ExecStart=/usr/bin/python3 /srv/ocrserver/scripts/metrics_collector.py --db /srv/ocrserver/data/metrics.db
+# Collects on the host (/proc, nvidia-smi) and POSTs the row to the wrapper
+# (/internal/metrics, wrapper 0.3.14+), which owns metrics.db. The host never
+# opens the DB file itself. No root needed any more.
+User=jikhanjung
+ExecStart=/usr/bin/python3 /srv/ocrserver/scripts/metrics_collector.py
 Nice=10
 IOSchedulingClass=idle

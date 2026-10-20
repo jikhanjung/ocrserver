@@ -176,6 +176,11 @@ _start_time = time.time()
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
 async def db_init() -> None:
+    # WAL (0.3.14): readers (the daily backup, /api queries) no longer block
+    # writers. Persistent in the file; the -wal/-shm files sit next to it in the
+    # bind-mounted /data directory.
+    await _db.execute("PRAGMA journal_mode=WAL")
+    await _db.execute("PRAGMA busy_timeout=5000")
     await _db.executescript("""
         CREATE TABLE IF NOT EXISTS jobs (
             job_id       TEXT PRIMARY KEY,
@@ -536,19 +541,122 @@ def _auto_step(span_secs: int, target_points: int = 360) -> int:
     return _STEP_LADDER[-1]
 
 
-async def _get_metrics_db() -> aiosqlite.Connection | None:
-    """Lazy-open a read-only handle to metrics.db. Returns None if the file
-    doesn't exist yet (collector hasn't fired)."""
+_METRICS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS metrics (
+    ts               INTEGER PRIMARY KEY,
+    load1            REAL,
+    load5            REAL,
+    load15           REAL,
+    mem_used_mb      INTEGER,
+    mem_total_mb     INTEGER,
+    gpu0_util        REAL,
+    gpu0_temp        REAL,
+    gpu0_mem_used_mb INTEGER,
+    gpu0_mem_total_mb INTEGER,
+    gpu1_util        REAL,
+    gpu1_temp        REAL,
+    gpu1_mem_used_mb INTEGER,
+    gpu1_mem_total_mb INTEGER
+);
+"""
+
+
+_metrics_year: int | None = None   # UTC year of the rows in metrics.db
+_metrics_src = "metrics"          # FROM clause for reads; spans last year's archive when attached
+
+
+def _utc_year(ts: float) -> int:
+    return time.gmtime(ts).tm_year
+
+
+def _metrics_archive_path(year: int) -> str:
+    base, ext = os.path.splitext(METRICS_DB_PATH)
+    return f"{base}_{year}{ext}"           # /data/metrics_2026.db
+
+
+async def _open_metrics_db() -> aiosqlite.Connection:
+    global _metrics_year, _metrics_src
+    conn = await aiosqlite.connect(METRICS_DB_PATH)
+    conn.row_factory = aiosqlite.Row
+    await conn.execute("PRAGMA journal_mode=WAL")
+    await conn.execute("PRAGMA busy_timeout=5000")
+    await conn.executescript(_METRICS_SCHEMA)
+    async with conn.execute("SELECT MIN(ts) FROM metrics") as c:
+        first = (await c.fetchone())[0]
+    _metrics_year = _utc_year(first) if first else None
+    # Attach the previous year's archive read-only so ranges that cross 1 Jan
+    # (and range=all) still see last December.
+    _metrics_src = "metrics"
+    prev = _metrics_archive_path((_metrics_year or _utc_year(time.time())) - 1)
+    if os.path.exists(prev):
+        await conn.execute("ATTACH DATABASE ? AS prev", (f"file:{prev}?mode=ro",))
+        _metrics_src = "(SELECT * FROM metrics UNION ALL SELECT * FROM prev.metrics)"
+    return conn
+
+
+async def _get_metrics_db() -> aiosqlite.Connection:
+    """Lazy-open metrics.db read-write. The wrapper is its only user (0.3.14):
+    the host collector POSTs rows to /internal/metrics instead of opening the
+    file, so host processes never touch a DB a container has open."""
     global _metrics_db
     if _metrics_db is not None:
         return _metrics_db
-    if not os.path.exists(METRICS_DB_PATH):
-        return None
     async with _metrics_db_lock:
-        if _metrics_db is None and os.path.exists(METRICS_DB_PATH):
-            _metrics_db = await aiosqlite.connect(METRICS_DB_PATH)
-            _metrics_db.row_factory = aiosqlite.Row
+        if _metrics_db is None:
+            _metrics_db = await _open_metrics_db()
     return _metrics_db
+
+
+async def _rotate_metrics_db(new_year: int) -> None:
+    """New UTC year: keep last year's rows as metrics_YYYY.db and start an
+    empty metrics.db. Called with _metrics_db_lock held."""
+    global _metrics_db
+    old_year = _metrics_year
+    await _metrics_db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    await _metrics_db.close()
+    _metrics_db = None
+    dest = _metrics_archive_path(old_year)
+    if os.path.exists(dest):               # never overwrite an archive
+        dest = f"{dest}.{int(time.time())}"
+    os.replace(METRICS_DB_PATH, dest)
+    for sfx in ("-wal", "-shm"):
+        try:
+            os.remove(METRICS_DB_PATH + sfx)
+        except FileNotFoundError:
+            pass
+    print(f"[metrics] new year {new_year}: archived {old_year} → {dest}", flush=True)
+    _metrics_db = await _open_metrics_db()
+
+
+if WRAPPER_ROLE == "ocr":
+
+    @app.post("/internal/metrics")
+    async def internal_metrics(request: Request):
+        """One row from scripts/metrics_collector.py (host, every minute).
+        nginx limits /internal/ to loopback + the compose network."""
+        try:
+            row = await request.json()
+            vals = [int(row["ts"])]
+            for col in _METRIC_COLS:
+                v = row.get(col)
+                vals.append(None if v is None else float(v))
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError) as e:
+            raise HTTPException(status_code=400, detail=f"bad metrics row: {e}")
+        global _metrics_year
+        await _get_metrics_db()
+        year = _utc_year(vals[0])
+        cols = ["ts", *_METRIC_COLS]
+        async with _metrics_db_lock:
+            if _metrics_year is not None and year > _metrics_year:
+                await _rotate_metrics_db(year)
+            await _metrics_db.execute(
+                f"INSERT OR REPLACE INTO metrics ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
+                vals,
+            )
+            await _metrics_db.commit()
+            if _metrics_year is None:
+                _metrics_year = year
+        return {"ok": True, "ts": vals[0]}
 
 
 @app.get("/api/metrics")
@@ -565,7 +673,7 @@ async def api_metrics(
     if range_secs is None:
         frm = now - 3600
         if mdb:
-            async with mdb.execute("SELECT MIN(ts) AS m FROM metrics") as c:
+            async with mdb.execute(f"SELECT MIN(ts) AS m FROM {_metrics_src}") as c:
                 row = await c.fetchone()
             if row and row["m"]:
                 frm = int(row["m"])
@@ -588,7 +696,7 @@ async def api_metrics(
         avg_cols = ", ".join(f"AVG({c}) AS {c}" for c in _METRIC_COLS)
         sql = (
             f"SELECT (ts/?)*? AS bucket, {avg_cols} "
-            "FROM metrics WHERE ts >= ? AND ts <= ? "
+            f"FROM {_metrics_src} WHERE ts >= ? AND ts <= ? "
             "GROUP BY bucket ORDER BY bucket"
         )
         async with mdb.execute(sql, (step, step, frm, now)) as c:
