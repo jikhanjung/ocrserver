@@ -1,9 +1,9 @@
-# HANDOFF — 2026-10-20 08:10 UTC (wrapper 0.3.14 ocrserver.db WAL · metrics 를 wrapper 가 기록 · 호스트 DB 접근 제거 · codex 한도 75% 정책)
+# HANDOFF — 2026-10-20 09:55 UTC (wrapper 0.3.14 WAL·metrics·백업 docker exec · 워커 0.3.11 · 동시 10 · codex 한도 75% 정책)
 
 > **🟢 이 박스가 현재 상태의 전부다 (2026-10-20).**
 > - **GPU 는 둘 다 figsplit 학습 중** (`~/projects/figsplit`, 도판→패널 로컬 모델). `chandra-a`·`llm` **정지** — 컨테이너는 wrapper·llmwrapper·nginx 만.
 >   `/healthz` 는 ok 이고, chandra `/health` 502 는 의도된 상태다. OCR+LLM 복구는 **사용자가 요청할 때만** 한다(`mode-llm.sh`).
-> - **이미지**: `ocrwrapper:0.3.14`(10-20 08:03 배포, Hub push, digest `6f47af06…`), 워커 스크립트 `figures_worker.py` 0.3.10. 확인은 `curl -s localhost:8080/healthz`.
+> - **이미지**: `ocrwrapper:0.3.14`(10-20 08:03 배포, Hub push, digest `6f47af06…`), 워커 스크립트 `figures_worker.py` **0.3.11**(10-20 09:47 재시작, 실패 오류에 codex 의 turn.failed 메시지를 담음). 확인은 `curl -s localhost:8080/healthz`.
 >   0.3.14: **ocrserver.db 를 WAL 로 전환**(시작 때 PRAGMA, 파일에 남음), `POST /internal/metrics`(수집기 → wrapper 가 metrics.db 에 기록),
 >   **metrics.db 연도별 분리**(새해 첫 줄이 오면 전년도를 `metrics_YYYY.db` 로 보관하고 새로 시작, 조회 때 전년도를 ro ATTACH). 보관 정리는 하지 않는다(10년 ≈ 330 MB, 사용자 결정).
 > - **도판 워커 10개**: systemd `ocrserver-figures-worker@1`…`@10` 모두 enabled·active. 동시 실행 수는 sudo 없이 런타임으로 조절한다.
@@ -14,7 +14,7 @@
 > - **큐 처리 순서** (`wrapper/figures.py` `_pick_queued`): 클라이언트 사이에서는 공평하게 돌고, 한 클라이언트 안에서는 **먼저 제출된 작업부터** 처리한다
 >   (link 를 먼저 처리하지 않는다).
 > - **codex 주간 한도 ≈ $1,300 상당 = 100%.** 비용은 link ≈ $0.3–0.5/항목(~150 s), panels ≈ $0.08–0.17/항목(~80 s).
->   **사용자 정책 (10-20 개정)**: 사용량 **75%까지 빠른 모드**(max_workers 5, S 10) → 75% 부터 느린 모드(max_workers 1).
+>   **사용자 정책 (10-20 개정)**: 사용량 **75%까지 빠른 모드**(**max_workers 10**, S 10 — 10-20 08:15 5 → 10) → 75% 부터 느린 모드(max_workers 1).
 >   느린 모드에서는 S 를 정해서 총 소진율 ≈ (100−used)/남은 시간 × 0.9 가 되게 맞춘다.
 >   리셋이 감지되면(resets_at 변경 또는 used 급락) 빠른 모드로 돌아간다. 한도는 **예고 없이 일찍 리셋된다**: 10-17 20:40 과 10-20 06:32, 두 번 다 58%에서 리셋됐다.
 >   현재 창은 **10-27 06:32 UTC 까지**(resets_at 1793082737)이고, 10-20 07:00 부터 빠른 모드다.
@@ -130,6 +130,13 @@
   - link 는 S=3600 에서도 시간당 ~10건 ≈ $4/h 라, 이 방법으로는 더 낮출 수 없다.
   - panels 는 S 700–1400 이면 $3/h 안팎이다.
   - 그런데 리셋이 두 번 다 58%에서 일찍 와서 아껴 둔 한도를 잃었다 → 10-20 사용자가 전환 기준을 **75%** 로 올렸다.
+- **wrapper 0.3.14**(10-20 08:03, `3f9759c`): ocrserver.db WAL 전환, `POST /internal/metrics` + metrics.db 연도별 분리.
+  수집기(`metrics_collector.py`)는 HTTP POST 로 바꾸고 유닛은 `User=jikhanjung`(사용자 sudo cp + daemon-reload, 08:07:50 첫 POST 확인).
+- **호스트에서 라이브 DB 를 열지 않게**(사용자 규칙 10-20): report.sh 는 `docker exec`, 백업은 wrapper 안에서 실행(`6d0d46c`, compose 에
+  `/stage`·`/backup` 마운트, 08:10 수동 1회 2.96 GB 9.5 s ok), figsplit 은 백업 스냅샷만 읽음(figsplit `9b60a6d`).
+- **동시 상한 5 → 10**(10-20 08:15, 사용자): 첫 한 시간 $59(약 4.5%/h, link 많을 때).
+- **figures_worker 0.3.11**(10-20 09:47, `df357a4`): `codex exit 1:` 뒤가 비던 실패의 원인은 OpenAI 쪽
+  "Selected model is at capacity" 였다(07:45·09:27 에 몇 초 간격으로 2건씩). 이제 그 메시지가 오류에 보인다. 재시도되어 영구 실패는 늘지 않음.
 - **DB 잠금 사고**(10-18 03:57–03:59): 제가 라이브 DB 에 돌린 2분짜리 집계 쿼리 때문에 워커 500 이 18건 났다.
   스스로 회복했고, 고아 claim 2건은 05:08 stale requeue 로 다시 큐에 들어갔다. 교훈은 위 박스에 적었다.
 - **figsplit 지원**: 사용자 요청으로 말뭉치 v2 질의에 답했다.
@@ -952,7 +959,7 @@ llm          vllm/vllm-openai:latest       Exited
 
 ### DB
 - `data/ocrserver.db` — OCR 잡/페이지. wrapper RW. ~1.5GB (jobs 7700+).
-- `data/metrics.db` — host metrics. metrics_collector 가 RW, wrapper RO.
+- `data/metrics.db` — host metrics. 0.3.14 부터 wrapper 만 연다(수집기는 `POST /internal/metrics`). 전년도는 `metrics_YYYY.db`.
 - `data/llmserver.db` — **신규**. llmwrapper RW, wrapper RO. WAL.
 
 ### 호스트 보호 / 메트릭
@@ -993,8 +1000,8 @@ llm          vllm/vllm-openai:latest       Exited
 
 **2026-10-20 추가:**
 
-- **한도 75% 전환**: 빠른 모드는 시간당 ~2.3%라 75%까지 ~33 h, 10-21 16:00 UTC 전후로 예상한다.
-  70%를 넘으면 5분 간격 감시(scratchpad `watch50.sh` 방식)를 띄워 넘치지 않게 전환한다. 세션 cron(a8edd8a6)은 10-27 에 만료된다.
+- **한도 75% 전환**: 동시 10 으로 시간당 ~3–4.5%라 10-21 이른 시간(UTC)에 75% 에 닿을 것으로 예상한다(09:26 에 8%).
+  70%를 넘으면 5분 간격 감시(scratchpad `watch50.sh` 방식)를 띄워 넘치지 않게 전환한다. 세션 cron(ee0f1181)은 10-27 에 만료된다.
 - **link 느린 모드 한계**: S=3600 에서도 시간당 ~$4 다. 더 낮추려면 둘 중 하나다(사용자 결정 대기).
   (a) `sudo systemctl stop ocrserver-figures-worker@{2..10}` (사용자 실행), (b) wrapper 에 전체(워커 공통) 간격을 추가한다.
 - **10-20 18:07 백업 확인**: 컨테이너 실행(`backup_db.sh`)·WAL 첫 회. `backup.log` 에 `backup OK` 와 그 시각 워커 500 이 없는지 본다.
