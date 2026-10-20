@@ -49,7 +49,7 @@ import fitz
 import requests
 from PIL import Image, ImageDraw
 
-VERSION = "0.3.10"
+VERSION = "0.3.11"
 WRAPPER_URL = os.getenv("WRAPPER_URL", "http://127.0.0.1:8080").rstrip("/")
 TOKEN = os.getenv("FIGURES_WORKER_TOKEN", "")
 PDF_DIR = os.getenv("PDF_DIR", "/srv/ocrserver/data/pdfs")
@@ -489,6 +489,16 @@ def run_codex(cwd: str, prompt: str, schema: dict, images: list, model: str, eff
     return info
 
 
+def _turn_err_message(events: list) -> str:
+    """First message from codex's turn.failed / error events ('' if none)."""
+    for e in events:
+        err = e.get("error")
+        msg = (err.get("message") if isinstance(err, dict) else None) or e.get("message")
+        if msg:
+            return str(msg).strip()
+    return ""
+
+
 # ── minimal JSON-schema check (no jsonschema on the host) ─────────────────────
 
 def schema_errors(value, schema: dict, path: str = "$") -> list:
@@ -608,11 +618,15 @@ def process(item: dict) -> dict:
     if info.get("timed_out") or info["code"] is None:
         return {"status": "budget_exhausted",
                 "error": f"session exceeded {SESSION_TIMEOUT[kind]}s — {run_dir}", **base}
+    # codex's own reason (turn.failed / error event) first — stderr's last line is usually
+    # model-refresh noise, which left errors blank (2026-10-20: "Selected model is at capacity").
+    why = _turn_err_message(info["turn_err"])
     if info["code"]:
         tail = _strip_noise(info["stderr"]).strip().splitlines()[-1:] or [""]
-        return {"status": "failed", "error": f"codex exit {info['code']}: {tail[0][:200]} — {run_dir}", **base}
+        return {"status": "failed", "error": f"codex exit {info['code']}: {(why or tail[0])[:200]} — {run_dir}", **base}
     if info["turn_err"] or not info["turn_ok"]:
-        return {"status": "failed", "error": f"codex turn failed/incomplete — {run_dir}", **base}
+        return {"status": "failed",
+                "error": f"codex turn failed/incomplete{': ' + why[:200] if why else ''} — {run_dir}", **base}
     if not isinstance(info["response"], dict):
         return {"status": "failed", "error": f"no JSON object in response — {run_dir}", **base}
     errs = schema_errors(info["response"], prompt["schema"])
