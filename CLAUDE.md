@@ -37,6 +37,12 @@ The host is a single RTX 8000 × 2 server. Two GPUs, three operating shapes:
 - **OCR + LLM** (`mode-llm.sh`) — chandra-a on GPU 0, Qwen3-14B on GPU 1.
 - **LLM only** — rare, only if OCR is idle.
 
+GPU 0 is not always chandra-a's: other jobs (figsplit training) may hold it
+with chandra-a stopped. `mode-ocr.sh` then runs OCR × 1 on GPU 1 (concurrency
+6 per live backend) and never starts chandra-a on a busy GPU 0; `mode-llm.sh`
+refuses (changes nothing) when that would leave zero OCR backends. Shared
+helpers are in `mode-lib.sh` — deploy it with the scripts (devlog 053).
+
 `mode-*.sh` swap `nginx.conf` to the right config and toggle compose profiles.
 Current mode is visible in `/status` (mode chip) and at `_meta.mode` in
 `/api/services`.

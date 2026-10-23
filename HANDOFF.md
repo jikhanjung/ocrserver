@@ -5,7 +5,8 @@
 >   `chandra-a`·`llm` 은 **정지**. 표준 모드 스크립트에 없는 모양이라 손으로 맞췄다:
 >   `docker compose --profile ocr up -d --no-deps chandra-b` → healthy(8분) → `cp nginx.ocr.conf nginx.conf` + `nginx -s reload`(upstream 이 `resolve` 라 꺼진 chandra-a 는 빠진다).
 >   `OCR_CONCURRENCY=6`(GPU 하나) 그대로라 wrapper 는 재생성하지 않았다. `/api/services` mode `1ocr`.
->   `mode-ocr.sh` 는 동시 12(GPU 둘 전제)로 wrapper 를 재생성하므로 GPU 0 이 빌 때 chandra-a 까지 띄울 때만 쓴다. `mode-llm.sh` 는 chandra-b 를 끄고 chandra-a 로 보낸다(지금 chandra-a 는 꺼져 있음 — 주의).
+>   **모드 스크립트는 10-23 부터 GPU 0 을 본다(devlog 053, `mode-lib.sh`)**: `mode-ocr.sh` 는 GPU 0 이 바쁘면 chandra-a 를 띄우지 않고 OCR × 1·동시 6 으로 간다.
+>   `mode-llm.sh` 는 OCR 이 0 이 되면 거절한다(지금이 그 상태). 학습이 끝나 GPU 0 이 비면 `mode-ocr.sh` 가 chandra-a 까지 띄운다(OCR × 2·동시 12, 아직 미검증).
 > - **이미지**: `ocrwrapper:0.3.17`(10-23 배포, Hub push, digest `95cc661e…`). PDF 렌더를 PyMuPDF(AGPL) → **pypdfium2** 로 바꿨다(devlog 050).
 >   패키지는 `wrapper/requirements.lock` 으로 고정한다. 0.3.15 는 고정 없이 재빌드해 PyMuPDF 2.0 이 딸려 와서 0.3.16 으로 고정했다(Hub `4bf6ab40…`).
 >   0.3.15 는 emSign CA 대응(certifi·pip·ca-certificates, devlog 049, Hub `afb5973f…`)이었다. nginx 도 10-23 새 `nginx:alpine` 으로 재생성했다.

@@ -1,34 +1,51 @@
 #!/bin/bash
-# GPU 1: chandra-b (OCR × 2)
+# OCR mode: chandra on every GPU that is free for it — GPU 1 chandra-b always,
+# GPU 0 chandra-a unless another job holds GPU 0 (then OCR × 1 on GPU 1).
+# Concurrency = 6 per live backend.
 set -e
 cd /srv/ocrserver
+. ./mode-lib.sh
 
 echo "[mode] LLM 중지..."
 docker compose --profile llm stop llm 2>/dev/null || true
 
-# Update OCR_CONCURRENCY in place, preserving other env vars (MODE_TOKEN, etc).
-touch .env
-if grep -q "^OCR_CONCURRENCY=" .env; then
-    sed -i "s/^OCR_CONCURRENCY=.*/OCR_CONCURRENCY=12/" .env
+if is_running chandra-a; then
+    echo "[mode] chandra-a (GPU 0) 이미 가동 중"
+elif gpu0_free_for_chandra_a; then
+    echo "[mode] chandra-a 기동 (GPU 0)..."
+    docker compose up -d --no-deps chandra-a
 else
-    echo "OCR_CONCURRENCY=12" >> .env
+    echo "[mode] GPU 0 사용 중 ($(gpu0_used_mib) MiB, chandra-a 아님) — chandra-a 는 띄우지 않는다"
 fi
 
 echo "[mode] chandra-b 기동 (GPU 1)..."
-docker compose --profile ocr up -d chandra-b
+docker compose --profile ocr up -d --no-deps chandra-b
 
-echo "[mode] chandra-b health 대기 중 (vLLM compile + CUDA graph capture, ~4-5분)..."
-until docker compose exec -T chandra-b curl -sf http://localhost:8000/health > /dev/null 2>&1; do
-    sleep 5
-done
-echo "[mode] chandra-b ready"
+echo "[mode] health 대기 (vLLM compile + CUDA graph capture, ~5-8분)..."
+n=0
+if is_running chandra-a; then
+    if wait_healthy chandra-a; then
+        n=$((n + 1))
+    else
+        # nginx resolves the name, so a running-but-broken chandra-a would still get pages
+        echo "[mode] chandra-a 중지 (healthy 아님)"
+        docker compose stop chandra-a
+    fi
+fi
+if wait_healthy chandra-b ocr; then n=$((n + 1)); fi
+if [ "$n" -eq 0 ]; then
+    echo "[mode] OCR 백엔드가 하나도 안 떴다 — nginx 는 그대로 둔다"
+    recreate_wrapper
+    exit 1
+fi
 
-echo "[mode] nginx config -> OCR (chandra-a + chandra-b, least_conn) + reload..."
-cp nginx.ocr.conf nginx.conf
-docker compose exec nginx nginx -s reload 2>/dev/null || \
-    docker compose up -d --no-deps --force-recreate nginx
+set_ocr_concurrency $((6 * n))
 
-echo "[mode] wrapper recreate (OCR_CONCURRENCY=12 적용)..."
-docker compose up -d --no-deps --force-recreate wrapper
+echo "[mode] nginx config -> OCR (chandra-a + chandra-b, least_conn, resolve) + reload..."
+# upstream servers use `resolve`, so a stopped chandra-a simply drops out
+reload_nginx nginx.ocr.conf
 
-echo "[mode] OCR × 2 (GPU 0 + GPU 1) — concurrency 12"
+echo "[mode] wrapper recreate (OCR_CONCURRENCY=$((6 * n)) 적용)..."
+recreate_wrapper
+
+echo "[mode] OCR × $n — concurrency $((6 * n))"
