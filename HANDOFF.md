@@ -1,4 +1,4 @@
-# HANDOFF — 2026-10-23 (wrapper 0.3.17 pypdfium2 · 0.3.16 패키지 고정 · 0.3.15 emSign CA 대응 · 워커 0.3.12 대기 · codex 한도 75% 정책)
+# HANDOFF — 2026-10-23 (wrapper 0.3.17 pypdfium2 · 0.3.16 패키지 고정 · 0.3.15 emSign CA 대응 · 워커 0.3.12 · codex 한도 75% 정책)
 
 > **🟢 이 박스가 현재 상태의 전부다 (2026-10-20).**
 > - **GPU 는 둘 다 figsplit 학습 중** (`~/projects/figsplit`, 도판→패널 로컬 모델). `chandra-a`·`llm` **정지** — 컨테이너는 wrapper·llmwrapper·nginx 만.
@@ -6,7 +6,7 @@
 > - **이미지**: `ocrwrapper:0.3.17`(10-23 배포, Hub push, digest `95cc661e…`). PDF 렌더를 PyMuPDF(AGPL) → **pypdfium2** 로 바꿨다(devlog 050).
 >   패키지는 `wrapper/requirements.lock` 으로 고정한다. 0.3.15 는 고정 없이 재빌드해 PyMuPDF 2.0 이 딸려 와서 0.3.16 으로 고정했다(Hub `4bf6ab40…`).
 >   0.3.15 는 emSign CA 대응(certifi·pip·ca-certificates, devlog 049, Hub `afb5973f…`)이었다. nginx 도 10-23 새 `nginx:alpine` 으로 재생성했다.
->   **워커 0.3.12(pypdfium2)는 dev 트리에만 있다** — 라이브 반영은 사용자 sudo(「곧 해야 할 작업」). 이전 `ocrwrapper:0.3.14`(10-20 08:03 배포, Hub push, digest `6f47af06…`), 워커 스크립트 `figures_worker.py` **0.3.11**(10-20 09:47 재시작, 실패 오류에 codex 의 turn.failed 메시지를 담음). 확인은 `curl -s localhost:8080/healthz`.
+>   **워커 `figures_worker.py` 0.3.12(pypdfium2)** 10-23 02:09 UTC 라이브 반영(사용자 sudo cp + restart), 10개 모두 0.3.12. 이전 `ocrwrapper:0.3.14`(10-20 08:03 배포, Hub push, digest `6f47af06…`), 워커 스크립트 `figures_worker.py` **0.3.11**(10-20 09:47 재시작, 실패 오류에 codex 의 turn.failed 메시지를 담음). 확인은 `curl -s localhost:8080/healthz`.
 >   0.3.14: **ocrserver.db 를 WAL 로 전환**(시작 때 PRAGMA, 파일에 남음), `POST /internal/metrics`(수집기 → wrapper 가 metrics.db 에 기록),
 >   **metrics.db 연도별 분리**(새해 첫 줄이 오면 전년도를 `metrics_YYYY.db` 로 보관하고 새로 시작, 조회 때 전년도를 ro ATTACH). 보관 정리는 하지 않는다(10년 ≈ 330 MB, 사용자 결정).
 > - **도판 워커 10개**: systemd `ocrserver-figures-worker@1`…`@10` 모두 enabled·active. 동시 실행 수는 sudo 없이 런타임으로 조절한다.
@@ -1006,9 +1006,8 @@ llm          vllm/vllm-openai:latest       Exited
 
 **2026-10-23 추가 — pypdfium2 전환 (devlog 050):**
 
-- **워커 0.3.12 라이브 반영** (사용자 sudo, `/srv/ocrserver/scripts/` 는 root 소유):
-  `sudo cp ~/projects/ocrserver/scripts/figures_worker.py /srv/ocrserver/scripts/ && sudo systemctl restart 'ocrserver-figures-worker@*'`.
-  `~/venv/ocrserver` 에 pypdfium2 5.14.0 은 설치돼 있다. 라이브 워커는 그때까지 0.3.11(PyMuPDF)이다.
+- ✅ 워커 0.3.12 라이브 반영(10-23 02:09 UTC, 사용자 sudo). 10개 모두 0.3.12, 오류 없음. 도판 큐가 비어 있어 실제 항목으로는 아직 안 돌았다 —
+  다음 도판 작업의 첫 항목들(페이지 렌더·target·crop)을 확인한다.
 - **OCR 회귀**: chandra 가 정지 중이라 pdfium 렌더로 `kruskal1964.pdf` 15/15 를 아직 못 봤다. OCR 복구 때 꼭 확인한다.
 - **chandra 이미지**: 루트 `Dockerfile` 은 pypdfium2 로 바꿨지만 재빌드하지 않았다. 이미지 안의 `batch_ocr.py` 는 아직 PyMuPDF 판이다.
   emSign 얇은 레이어(0.1.2)를 만들 때 같이 한다.
