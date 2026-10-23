@@ -21,11 +21,11 @@ import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 from datetime import datetime
 
-import fitz  # PyMuPDF
+import pypdfium2 as pdfium
 import requests
-from PIL import Image
 
 
 def sha256_file(filepath):
@@ -37,11 +37,19 @@ def sha256_file(filepath):
     return h.hexdigest()
 
 
-def render_page(doc, page_idx, dpi=150, quality=85):
+# pdfium is not thread-safe, not even across documents: with --concurrency > 1
+# only one thread may open/render at a time. OCR itself runs outside the lock.
+_pdf_lock = threading.Lock()
+
+
+def render_page(pdf_path, page_idx, dpi=150, quality=85):
     """Render a single PDF page to base64 JPEG."""
-    mat = fitz.Matrix(dpi / 72, dpi / 72)
-    pix = doc[page_idx].get_pixmap(matrix=mat, alpha=False)
-    img = Image.frombytes('RGB', [pix.width, pix.height], pix.samples)
+    with _pdf_lock:
+        doc = pdfium.PdfDocument(pdf_path)
+        try:
+            img = doc[page_idx].render(scale=dpi / 72).to_pil().convert('RGB')
+        finally:
+            doc.close()
     buf = io.BytesIO()
     img.save(buf, format='JPEG', quality=quality)
     return base64.b64encode(buf.getvalue()).decode()
@@ -217,10 +225,10 @@ def save_json_atomic(out_path, result):
     os.replace(tmp_path, out_path)
 
 
-def process_single_page(doc, page_idx, dpi, vllm_url, session):
+def process_single_page(pdf_path, page_idx, dpi, vllm_url, session):
     """Render and OCR one page, returning a page record."""
     page_t0 = time.time()
-    image_b64 = render_page(doc, page_idx, dpi)
+    image_b64 = render_page(pdf_path, page_idx, dpi)
     text = ocr_page(image_b64, vllm_url, session=session)
     page_elapsed = time.time() - page_t0
     return {
@@ -232,8 +240,7 @@ def process_single_page(doc, page_idx, dpi, vllm_url, session):
 
 def process_single_page_from_pdf(pdf_path, page_idx, dpi, vllm_url):
     """Open a PDF, process one page, and return its OCR result."""
-    with fitz.open(pdf_path) as doc:
-        return process_single_page(doc, page_idx, dpi, vllm_url, session=None)
+    return process_single_page(pdf_path, page_idx, dpi, vllm_url, session=None)
 
 
 def run_page_jobs(pdf_path, page_indexes, dpi, vllm_url, concurrency, total_pages, prefix):
@@ -303,12 +310,14 @@ def process_pdf(pdf_path, output_dir, vllm_url, dpi=150, concurrency=1, file_idx
 
     # Open PDF
     try:
-        doc = fitz.open(pdf_path)
+        with _pdf_lock:
+            doc = pdfium.PdfDocument(pdf_path)
+            total_pages = len(doc)
+            doc.close()
     except Exception as e:
         print(f'{prefix}   ERROR opening PDF: {e}', flush=True)
         return None, str(e)
 
-    total_pages = doc.page_count
     print(f'{prefix}   pages: {total_pages}', flush=True)
 
     partial_result = load_partial_output_json(out_path)
@@ -327,7 +336,6 @@ def process_pdf(pdf_path, output_dir, vllm_url, dpi=150, concurrency=1, file_idx
         )
 
     t0 = time.time()
-    doc.close()
 
     current_results, current_failures = run_page_jobs(
         pdf_path,

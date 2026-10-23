@@ -30,10 +30,10 @@
   (예: max 6) 필요. per-page 디자인 (0.1.14) 으로 starvation 영향은
   좀 줄었지만 (큰 잡 _ocr_page 들이 chandra 대기 동안 다른 잡 슬롯
   사이에 끼어들 여지 생김) 근본 해결은 별건.
-- **per-page render 의 fitz.open 중복** (devlog 031 trade-off) — 페이지마다
-  `fitz.open()` 새로 호출하면 큰 PDF 의 헤더 파싱이 ~10ms/페이지 누적
-  (1773p = ~18s). 실 throughput 영향 미미하지만, per-job fitz doc 캐시
-  하면 더 깔끔. thread safety 확인 필요.
+- **per-page render 의 PDF open 중복** (devlog 031 trade-off) — 페이지마다
+  `pdfium.PdfDocument()` 를 새로 열면(0.3.17 전에는 `fitz.open()`) 큰 PDF 의 헤더 파싱이 ~10ms/페이지 누적
+  (1773p = ~18s). 실 throughput 영향 미미하지만, per-job doc 캐시
+  하면 더 깔끔. pdfium 은 스레드 세이프가 아니라 `_pdf_lock` 아래에서만 쓴다.
 - **/api/metrics gap visualization** — 호스트 다운 시 `pages_per_step` 도
   gap 으로 표시. `wrapper/main.py:285-289` 의 default fill 정책 수정.
   미니 작업.

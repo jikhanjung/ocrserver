@@ -36,7 +36,7 @@ nginx가 없는 단일 GPU 구성에서는 클라이언트가 `:8000`에 직접 
 ### `batch_ocr.py`
 
 서버가 아니라 **배치 처리 클라이언트**. `pdfs/` 디렉토리의 PDF를 스캔해서:
-1. 페이지를 JPEG로 렌더링 (PyMuPDF)
+1. 페이지를 JPEG로 렌더링 (pypdfium2, 0.3.17 전에는 PyMuPDF)
 2. base64 인코딩 후 `/v1/chat/completions`에 POST
 3. 결과를 `ocr_json/{sha256}.json`으로 저장
 

@@ -32,6 +32,7 @@ Env (systemd unit loads /srv/ocrserver/.env):
     FIGURES_TARGET_DPI     default 150  target page with the hint box (detect)
     FIGURES_MAX_LONG_PX    default 4000 cap for the panels crop
 """
+import contextlib
 import fcntl
 import html
 import json
@@ -45,11 +46,11 @@ import sys
 import threading
 import time
 
-import fitz
+import pypdfium2 as pdfium
 import requests
 from PIL import Image, ImageDraw
 
-VERSION = "0.3.11"
+VERSION = "0.3.12"
 WRAPPER_URL = os.getenv("WRAPPER_URL", "http://127.0.0.1:8080").rstrip("/")
 TOKEN = os.getenv("FIGURES_WORKER_TOKEN", "")
 PDF_DIR = os.getenv("PDF_DIR", "/srv/ocrserver/data/pdfs")
@@ -197,15 +198,13 @@ def _build_workspace(root: str, ready: str, file_hash: str, ocr_digest: str, pdf
         all_parts.append(f"=== page {p['page']} ===\n{t}\n")
     with open(os.path.join(root, "text", "all.txt"), "w") as f:
         f.write("\n".join(all_parts))
-    with fitz.open(pdf_path) as doc:
+    with open_pdf(pdf_path) as doc:
         n = len(doc)
         for i in range(n):
             out = os.path.join(root, "pages", f"p{i:03d}.png")
             if os.path.exists(out):
                 continue
-            pix = doc[i].get_pixmap(matrix=fitz.Matrix(PAGE_DPI / 72, PAGE_DPI / 72),
-                                    colorspace=fitz.csRGB, alpha=False)
-            pix.save(out)
+            render(doc[i], PAGE_DPI / 72).save(out)
     with open(os.path.join(root, "README.txt"), "w") as f:
         f.write(
             f"One paper. {n} PDF pages, {len(pages)} pages of OCR text. PAGE NUMBERS ARE 0-BASED everywhere.\n"
@@ -253,6 +252,22 @@ def sweep_workspaces() -> int:
 
 
 # ── rendering ─────────────────────────────────────────────────────────────────
+# pypdfium2 since 0.3.12 (PyMuPDF is AGPL). One worker process = one thread, so
+# pdfium's no-concurrent-calls rule needs no lock here (the wrapper has one).
+
+@contextlib.contextmanager
+def open_pdf(path: str):
+    doc = pdfium.PdfDocument(path)
+    try:
+        yield doc
+    finally:
+        doc.close()
+
+
+def render(pg, scale: float, crop=(0, 0, 0, 0)) -> Image.Image:
+    """Page → RGB image on white. crop = points cut off (left, bottom, right, top)."""
+    return pg.render(scale=scale, crop=crop).to_pil().convert("RGB")
+
 
 def hint_boxes_of(req: dict) -> list:
     """Page-level detect items carry hint_boxes[] (devlog 099 §4); the older
@@ -265,11 +280,8 @@ def hint_boxes_of(req: dict) -> list:
 
 
 def render_target(pdf_path: str, page: int, boxes: list, out: str) -> dict:
-    with fitz.open(pdf_path) as doc:
-        pg = doc[page]
-        pix = pg.get_pixmap(matrix=fitz.Matrix(TARGET_DPI / 72, TARGET_DPI / 72),
-                            colorspace=fitz.csRGB, alpha=False)
-        im = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    with open_pdf(pdf_path) as doc:
+        im = render(doc[page], TARGET_DPI / 72)
     d = ImageDraw.Draw(im)
     w, h = im.size
     for i, (x0, y0, x1, y1) in enumerate(boxes):
@@ -289,17 +301,16 @@ def render_crop(pdf_path: str, page: int, bbox, dpi: int, out: str) -> dict:
     clip render), plus a long-side cap so a full-page plate doesn't become a
     40-megapixel upload."""
     x0, y0, x1, y1 = bbox
-    with fitz.open(pdf_path) as doc:
+    with open_pdf(pdf_path) as doc:
         pg = doc[page]
-        clip = fitz.Rect(x0 / 1000 * pg.rect.width, y0 / 1000 * pg.rect.height,
-                         x1 / 1000 * pg.rect.width, y1 / 1000 * pg.rect.height)
-        long_pt = max(clip.width, clip.height)
+        pw, ph = pg.get_size()
+        clip = [x0 / 1000 * pw, y0 / 1000 * ph, x1 / 1000 * pw, y1 / 1000 * ph]
+        long_pt = max(clip[2] - clip[0], clip[3] - clip[1])
         eff = min(dpi, MAX_LONG_PX * 72 / long_pt) if long_pt > 0 else dpi
-        pix = pg.get_pixmap(matrix=fitz.Matrix(eff / 72, eff / 72), clip=clip,
-                            colorspace=fitz.csRGB, alpha=False)
-        pix.save(out)
-        return {"width": pix.width, "height": pix.height, "dpi": round(eff, 2),
-                "pdf_clip_xyxy_points": [clip.x0, clip.y0, clip.x1, clip.y1]}
+        im = render(pg, eff / 72, crop=(clip[0], ph - clip[3], pw - clip[2], clip[1]))
+    im.save(out)
+    return {"width": im.width, "height": im.height, "dpi": round(eff, 2),
+            "pdf_clip_xyxy_points": clip}
 
 
 # ── codex ─────────────────────────────────────────────────────────────────────
@@ -559,7 +570,7 @@ def process(item: dict) -> dict:
         item_dir = os.path.join(root, "items", item["item_id"])
         os.makedirs(item_dir, exist_ok=True)
         cwd, images = root, []
-        with fitz.open(pdf_path) as doc:
+        with open_pdf(pdf_path) as doc:
             n_pages = len(doc)
         payload = {"kind": kind, "item": req,
                    "workspace": {"pdf_pages": n_pages, "page_numbering": "0-based",
@@ -581,7 +592,7 @@ def process(item: dict) -> dict:
     else:  # panels
         item_dir = os.path.join(WS_DIR, item["file_hash"], "panels", item["item_id"])
         os.makedirs(item_dir, exist_ok=True)
-        with fitz.open(pdf_path) as doc:
+        with open_pdf(pdf_path) as doc:
             n_pages = len(doc)
         if req["page"] >= n_pages:
             return {"status": "failed", "error": f"page {req['page']} out of range ({n_pages} pages)"}

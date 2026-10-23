@@ -1,6 +1,7 @@
 fastapi
 uvicorn[standard]
-pymupdf
+pypdfium2
+pillow
 httpx
 python-multipart
 aiosqlite

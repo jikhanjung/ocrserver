@@ -11,12 +11,13 @@ example replies and rejects a malformed one.
         -w /app honestjung/ocrwrapper:0.3.3 python -m tests.contract_spec_v2
 """
 import hashlib
+import io
 import json
 import os
 import sys
 import tempfile
 
-import fitz
+import pypdfium2 as pdfium
 
 PM = os.environ.get("PM_PROMPTS_DIR")
 if not PM or not os.path.exists(os.path.join(PM, "detect.md")):
@@ -89,10 +90,12 @@ ok(schema_errors(bad2, PROMPTS["detect"]["schema"]), "detect: string for boolean
 
 
 def make_pdf(n=30):
-    doc = fitz.open()
+    doc = pdfium.PdfDocument.new()
     for i in range(n):
-        doc.new_page().insert_text((72, 72), f"page {i}")
-    return doc.tobytes()
+        doc.new_page(612, 792)
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
 
 
 with TestClient(main.app) as c:

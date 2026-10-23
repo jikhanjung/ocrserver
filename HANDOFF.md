@@ -1,10 +1,12 @@
-# HANDOFF — 2026-10-23 (wrapper 0.3.15 emSign CA 대응 · 0.3.14 WAL·metrics·백업 docker exec · 워커 0.3.11 · 동시 10 · codex 한도 75% 정책)
+# HANDOFF — 2026-10-23 (wrapper 0.3.17 pypdfium2 · 0.3.16 패키지 고정 · 0.3.15 emSign CA 대응 · 워커 0.3.12 대기 · codex 한도 75% 정책)
 
 > **🟢 이 박스가 현재 상태의 전부다 (2026-10-20).**
 > - **GPU 는 둘 다 figsplit 학습 중** (`~/projects/figsplit`, 도판→패널 로컬 모델). `chandra-a`·`llm` **정지** — 컨테이너는 wrapper·llmwrapper·nginx 만.
 >   `/healthz` 는 ok 이고, chandra `/health` 502 는 의도된 상태다. OCR+LLM 복구는 **사용자가 요청할 때만** 한다(`mode-llm.sh`).
-> - **이미지**: `ocrwrapper:0.3.15`(10-23 배포, Hub push, digest `afb5973f…`). 0.3.14 대비 코드 변경은 없고 certifi·pip·ca-certificates 만 갱신했다(devlog 049).
->   nginx 도 10-23 새 `nginx:alpine` 으로 재생성했다. 이전 `ocrwrapper:0.3.14`(10-20 08:03 배포, Hub push, digest `6f47af06…`), 워커 스크립트 `figures_worker.py` **0.3.11**(10-20 09:47 재시작, 실패 오류에 codex 의 turn.failed 메시지를 담음). 확인은 `curl -s localhost:8080/healthz`.
+> - **이미지**: `ocrwrapper:0.3.17`(10-23 배포, **Hub push 는 사용자 확인 대기**). PDF 렌더를 PyMuPDF(AGPL) → **pypdfium2** 로 바꿨다(devlog 050).
+>   패키지는 `wrapper/requirements.lock` 으로 고정한다. 0.3.15 는 고정 없이 재빌드해 PyMuPDF 2.0 이 딸려 와서 0.3.16 으로 고정했다(Hub `4bf6ab40…`).
+>   0.3.15 는 emSign CA 대응(certifi·pip·ca-certificates, devlog 049, Hub `afb5973f…`)이었다. nginx 도 10-23 새 `nginx:alpine` 으로 재생성했다.
+>   **워커 0.3.12(pypdfium2)는 dev 트리에만 있다** — 라이브 반영은 사용자 sudo(「곧 해야 할 작업」). 이전 `ocrwrapper:0.3.14`(10-20 08:03 배포, Hub push, digest `6f47af06…`), 워커 스크립트 `figures_worker.py` **0.3.11**(10-20 09:47 재시작, 실패 오류에 codex 의 turn.failed 메시지를 담음). 확인은 `curl -s localhost:8080/healthz`.
 >   0.3.14: **ocrserver.db 를 WAL 로 전환**(시작 때 PRAGMA, 파일에 남음), `POST /internal/metrics`(수집기 → wrapper 가 metrics.db 에 기록),
 >   **metrics.db 연도별 분리**(새해 첫 줄이 오면 전년도를 `metrics_YYYY.db` 로 보관하고 새로 시작, 조회 때 전년도를 ro ATTACH). 보관 정리는 하지 않는다(10년 ≈ 330 MB, 사용자 결정).
 > - **도판 워커 10개**: systemd `ocrserver-figures-worker@1`…`@10` 모두 enabled·active. 동시 실행 수는 sudo 없이 런타임으로 조절한다.
@@ -1002,6 +1004,16 @@ llm          vllm/vllm-openai:latest       Exited
 
 ## 곧 해야 할 작업
 
+**2026-10-23 추가 — pypdfium2 전환 (devlog 050):**
+
+- **워커 0.3.12 라이브 반영** (사용자 sudo, `/srv/ocrserver/scripts/` 는 root 소유):
+  `sudo cp ~/projects/ocrserver/scripts/figures_worker.py /srv/ocrserver/scripts/ && sudo systemctl restart 'ocrserver-figures-worker@*'`.
+  `~/venv/ocrserver` 에 pypdfium2 5.14.0 은 설치돼 있다. 라이브 워커는 그때까지 0.3.11(PyMuPDF)이다.
+- **0.3.17 Hub push**: 사용자 확인 대기.
+- **OCR 회귀**: chandra 가 정지 중이라 pdfium 렌더로 `kruskal1964.pdf` 15/15 를 아직 못 봤다. OCR 복구 때 꼭 확인한다.
+- **chandra 이미지**: 루트 `Dockerfile` 은 pypdfium2 로 바꿨지만 재빌드하지 않았다. 이미지 안의 `batch_ocr.py` 는 아직 PyMuPDF 판이다.
+  emSign 얇은 레이어(0.1.2)를 만들 때 같이 한다.
+
 **2026-10-23 추가 — emSign CA 키 유출 (GHSA-6q48-6c7w-9gw2), 도판 작업 재개 전에 처리:**
 
 - 배경: emSign ECC Root CA - G3 아래 중간 CA 키 8개가 유출돼 외부로 나가는 TLS 를 MITM 할 수 있다.
@@ -1016,10 +1028,12 @@ llm          vllm/vllm-openai:latest       Exited
   - `nginx` → 새 `nginx:alpine`(1.31.8): G3 가 없다.
   - 확인: `/healthz` ok 0.3.15, `/status` 200, 워커 오류 없음. Docker Hub push 완료(digest `afb5973f…`).
 - **남은 것**:
-  - `~/venv/ocrserver`(도판 워커 10개가 쓴다): pip 25.1.1, certifi 2026.04.22.
-    워커가 쉴 때 `~/venv/ocrserver/bin/python -m pip install -U "pip>=26.2.2" "certifi>=2026.10.19"` 를 돌리고 워커를 재시작한다
-    (`sudo systemctl restart 'ocrserver-figures-worker@*'`, 사용자 실행).
-  - chandra(`ocrserver:0.1.1`)·`vllm/vllm-openai` 이미지는 정지 중이라 확인하지 않았다. 다시 띄우기 전에 certifi 를 본다.
+  - ✅ `~/venv/ocrserver`(도판 워커 10개가 쓴다): 10-23 pip 26.2.2, certifi 2026.10.19 로 올렸다. 워커는 localhost http 만 써서 재시작은 필요 없다.
+  - **정지 이미지** (10-23 확인, 컨테이너를 띄우지 않고 `docker export` 로 봤다). 다시 띄우기 전에 고친다:
+    - chandra `ocrserver:0.1.1`: certifi 2026.04.22, pip 26.1.1, G3 가 있고 옛 uv 가 있다.
+      기존 이미지 위에 certifi·pip·ca-certificates 레이어만 얹어 `0.1.2` 를 만들면 된다. 모델을 다시 받지 않으니 KOPRI 빌드 멈춤과 무관하다.
+    - `vllm/vllm-openai:latest`(5개월 전): certifi 2026.04.22, pip 25.0.1, G3 가 있고 uv 가 있다. OCR+LLM 복구 때 감싸거나 새로 받는다.
+    - `dolfinserver2:0.29.6`(안 씀): pip 25.0.1, G3 있음. `figsplit-review`(실행 중)는 정상이다.
   - `figsplit/model/.venv`: certifi 는 이미 2026.10.19 이고 pip 만 26.2.1 이다. 학습이 끝난 뒤 올린다.
 
 **2026-10-20 추가:**

@@ -1,3 +1,3 @@
-PyMuPDF
+pypdfium2
 Pillow
 requests

@@ -7,9 +7,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade 
     && update-ca-certificates --fresh \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir -U "pip>=26.2.2" "certifi>=2026.10.19" \
-    && pip install --no-cache-dir \
-    fastapi "uvicorn[standard]" pymupdf httpx python-multipart aiosqlite pyyaml
+# 패키지는 requirements.lock 으로 고정한다 — 고정 없이 재빌드한 0.3.15 에 PyMuPDF 2.0·fastapi 0.161 이 딸려 왔다.
+COPY requirements.lock /tmp/requirements.lock
+RUN pip install --no-cache-dir -U "pip>=26.2.2" \
+    && pip install --no-cache-dir -r /tmp/requirements.lock
 
 WORKDIR /app
 COPY main.py figures.py version.py dashboard.html figures.html status.html metrics.html ./

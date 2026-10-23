@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import hashlib
+import io
 import json
 import os
 import threading
@@ -9,8 +10,8 @@ import uuid
 from contextlib import asynccontextmanager
 
 import aiosqlite
-import fitz
 import httpx
+import pypdfium2 as pdfium
 import yaml
 import figures
 from version import VERSION
@@ -46,13 +47,13 @@ _RETRY_DELAYS = [5, 15, 30, 60]
 # lifespan resume on every restart → infinite crash loop (2026-09-09, devlog 044).
 RESUME_MAX_ATTEMPTS = int(os.getenv("OCR_RESUME_MAX_ATTEMPTS", "3"))
 
-# PyMuPDF/MuPDF is not thread-safe (its docs say so outright). Concurrent
-# fitz.open()+render from several to_thread workers usually gets away with it,
-# but a PDF with a broken ICC profile ("cmsOpenProfileFromMem failed") races in
-# MuPDF's colorspace init and segfaults the whole process (ip=0, 2/3 runs).
-# Serialize every MuPDF call. Rendering is ~100 ms/page vs seconds of OCR, so
-# one lock costs nothing in throughput, and waiters release the GIL.
-_mupdf_lock = threading.Lock()
+# pdfium is not thread-safe: no two threads may call into it at once, not even
+# on different documents (pypdfium2 docs). The lock dates from PyMuPDF, where
+# concurrent fitz.open()+render raced in MuPDF's colorspace init on a PDF with a
+# broken ICC profile and segfaulted the process (devlog 044); 0.3.17 moved to
+# pypdfium2 (PyMuPDF is AGPL) and keeps it. Rendering is ~100 ms/page vs seconds
+# of OCR, so one lock costs nothing in throughput, and waiters release the GIL.
+_pdf_lock = threading.Lock()
 
 # When True, the host-side switcher is about to recreate this wrapper container.
 # /ocr POST rejects new jobs while this is set so we don't accept work that the
@@ -1031,7 +1032,7 @@ async def submit(
         client_id = x_client_id
     pdf_bytes = await file.read()
     # Move sync CPU/IO out of the event loop — for a 500MB PDF the hash
-    # (~1-2s), the optional fitz parse (~1-2s), and the disk write (~2-5s)
+    # (~1-2s), the optional PDF parse (~1-2s), and the disk write (~2-5s)
     # otherwise serialize the loop and freeze the dashboard during upload.
     file_hash = await asyncio.to_thread(
         lambda: hashlib.sha256(pdf_bytes).hexdigest())
@@ -1044,11 +1045,7 @@ async def submit(
     if total_pages is None or total_pages <= 0:
         def _count_pages(b: bytes) -> int:
             try:
-                doc = fitz.open(stream=b, filetype="pdf")
-                try:
-                    return len(doc)
-                finally:
-                    doc.close()
+                return _pdf_page_count(b)
             except Exception:
                 return 0
         total_pages = await asyncio.to_thread(_count_pages, pdf_bytes)
@@ -1396,8 +1393,8 @@ def _pdf_page_count(pdf_bytes: bytes) -> int:
     """Open the PDF just long enough to read page count. Cheap (~ms even for
     big PDFs) but still wrapped in to_thread when called so we don't pay even
     that on the event loop."""
-    with _mupdf_lock:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    with _pdf_lock:
+        doc = pdfium.PdfDocument(pdf_bytes)
         try:
             return len(doc)
         finally:
@@ -1408,15 +1405,17 @@ def _render_one_page(pdf_bytes: bytes, page_num: int) -> str:
     """Render a single page to base64-JPEG. Called from inside _ocr_page so
     render concurrency naturally caps at the OCR scheduler (CONCURRENCY) —
     no separate render burst, no need for a render-only semaphore."""
-    with _mupdf_lock:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    with _pdf_lock:
+        doc = pdfium.PdfDocument(pdf_bytes)
         try:
             page = doc[page_num]
-            long_pt = max(page.rect.width, page.rect.height)
+            long_pt = max(page.get_size())
             dpi = min(DPI, MAX_PAGE_PX * 72 / long_pt) if long_pt > 0 else DPI
-            zoom = dpi / 72
-            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-            return base64.b64encode(pix.tobytes("jpeg")).decode()
+            im = page.render(scale=dpi / 72).to_pil().convert("RGB")
+            buf = io.BytesIO()
+            # quality 95 = PyMuPDF tobytes("jpeg")'s default, what chandra saw before 0.3.17
+            im.save(buf, format="JPEG", quality=95)
+            return base64.b64encode(buf.getvalue()).decode()
         finally:
             doc.close()
 

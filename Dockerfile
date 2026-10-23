@@ -4,7 +4,7 @@ FROM vllm/vllm-openai:latest
 RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('datalab-to/chandra-ocr-2')"
 
 # Deps for batch_ocr.py (PDF rendering + image processing).
-RUN pip3 install --no-cache-dir PyMuPDF Pillow
+RUN pip3 install --no-cache-dir pypdfium2 Pillow
 
 COPY entrypoint.sh /workspace/entrypoint.sh
 COPY batch_ocr.py /workspace/batch_ocr.py

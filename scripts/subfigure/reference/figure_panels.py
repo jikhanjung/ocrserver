@@ -98,43 +98,46 @@ def figure_metadata(fig):
     return caption, panels, provenance
 
 
+def _render_clip(page, bbox_1000, dpi):
+    """페이지의 permille bbox 영역을 RGB 이미지로. (ocrserver: PyMuPDF(AGPL) 대신 pypdfium2)"""
+    pw, ph = page.get_size()
+    x0, y0, x1, y1 = bbox_1000
+    clip = [x0 / 1000 * pw, y0 / 1000 * ph, x1 / 1000 * pw, y1 / 1000 * ph]
+    bitmap = page.render(scale=dpi / 72, crop=(clip[0], ph - clip[3], pw - clip[2], clip[1]))
+    return bitmap.to_pil().convert('RGB'), clip
+
+
 def render_figure(fig, path, dpi=DEFAULT_DPI):
     """figure bbox 영역을 PDF 에서 PNG 로 렌더. 반환: 크기·clip 정보."""
-    import fitz
+    import pypdfium2 as pdfium
     raw = figure_bbox(fig)
-    x0, y0, x1, y1 = raw
-    with fitz.open(str(figure_pdf_path(fig))) as pdf:
+    pdf = pdfium.PdfDocument(str(figure_pdf_path(fig)))
+    try:
         if not 1 <= fig.page_no <= len(pdf):
             raise ValueError('invalid_page_number')
-        page = pdf[fig.page_no - 1]
-        clip = fitz.Rect(x0 / 1000 * page.rect.width, y0 / 1000 * page.rect.height,
-                         x1 / 1000 * page.rect.width, y1 / 1000 * page.rect.height)
-        pix = page.get_pixmap(matrix=fitz.Matrix(dpi / 72, dpi / 72), clip=clip,
-                              colorspace=fitz.csRGB, alpha=False)
-        pix.save(str(path))
-        return {'width': pix.width, 'height': pix.height,
-                'pdf_clip_xyxy_points': list(clip), 'render_origin_px': [pix.x, pix.y]}
+        image, clip = _render_clip(pdf[fig.page_no - 1], raw, dpi)
+    finally:
+        pdf.close()
+    image.save(str(path))
+    return {'width': image.width, 'height': image.height, 'pdf_clip_xyxy_points': clip,
+            'render_origin_px': [int(clip[0] * dpi / 72), int(clip[1] * dpi / 72)]}
 
 
 def crop_panel(fig, panel, dpi=DEFAULT_DPI):
     """패널 하나를 PNG bytes 로. 렌더 크기가 결과의 image_width/height 와 다르면(다른 dpi·PDF 교체)
     bbox 를 비례 변환한다."""
-    import fitz
-    from PIL import Image
+    import pypdfium2 as pdfium
     raw = figure_bbox(fig)
-    x0, y0, x1, y1 = raw
-    with fitz.open(str(figure_pdf_path(fig))) as pdf:
-        page = pdf[fig.page_no - 1]
-        clip = fitz.Rect(x0 / 1000 * page.rect.width, y0 / 1000 * page.rect.height,
-                         x1 / 1000 * page.rect.width, y1 / 1000 * page.rect.height)
-        pix = page.get_pixmap(matrix=fitz.Matrix(dpi / 72, dpi / 72), clip=clip,
-                              colorspace=fitz.csRGB, alpha=False)
-        image = Image.frombytes('RGB', (pix.width, pix.height), pix.samples)
+    pdf = pdfium.PdfDocument(str(figure_pdf_path(fig)))
+    try:
+        image, _ = _render_clip(pdf[fig.page_no - 1], raw, dpi)
+    finally:
+        pdf.close()
     meta = fig.panel_sync or {}
-    sw, sh = meta.get('image_width') or pix.width, meta.get('image_height') or pix.height
+    sw, sh = meta.get('image_width') or image.width, meta.get('image_height') or image.height
     bx0, by0, bx1, by1 = panel.bbox
-    box = (max(0, math.floor(bx0 * pix.width / sw)), max(0, math.floor(by0 * pix.height / sh)),
-           min(pix.width, math.ceil(bx1 * pix.width / sw)), min(pix.height, math.ceil(by1 * pix.height / sh)))
+    box = (max(0, math.floor(bx0 * image.width / sw)), max(0, math.floor(by0 * image.height / sh)),
+           min(image.width, math.ceil(bx1 * image.width / sw)), min(image.height, math.ceil(by1 * image.height / sh)))
     if box[0] >= box[2] or box[1] >= box[3]:
         raise ValueError('empty_panel_box')
     buffer = io.BytesIO()

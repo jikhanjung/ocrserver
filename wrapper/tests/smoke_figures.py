@@ -5,16 +5,17 @@ then walks the whole contract: PDF store → workspace → submit (all kinds,
 validation errors, dedup) → claim → heartbeat → result variants (done /
 failed→requeue / fatal→pause / budget) → resume → dashboard summary.
 
-Run inside the wrapper image (has fastapi/httpx/aiosqlite/pymupdf):
+Run inside the wrapper image (has fastapi/httpx/aiosqlite/pypdfium2):
     docker run --rm -e FIGURES_WORKER_TOKEN=t -v $PWD/wrapper:/app honestjung/ocrwrapper:0.3.0 \
         python -m tests.smoke_figures
 """
+import io
 import json
 import os
 import sys
 import tempfile
 
-import fitz
+import pypdfium2 as pdfium
 
 tmp = tempfile.mkdtemp(prefix="figsmoke-")
 os.environ["DB_PATH"] = os.path.join(tmp, "ocrserver.db")
@@ -43,11 +44,12 @@ def ok(cond, msg):
 
 
 def make_pdf() -> bytes:
-    doc = fitz.open()
+    doc = pdfium.PdfDocument.new()
     for i in range(3):
-        page = doc.new_page()
-        page.insert_text((72, 72), f"page {i} FIGURE 1")
-    return doc.tobytes()
+        doc.new_page(612, 792)
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
 
 
 with TestClient(main.app) as c:

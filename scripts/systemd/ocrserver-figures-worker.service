@@ -2,7 +2,7 @@
 #
 # Host-side executor for the wrapper's figure-split jobs (wrapper 0.3.0+, devlog 046/047).
 # Runs as jikhanjung because the Codex CLI login (~/.codex) and the venv with
-# PyMuPDF/Pillow/requests (~/venv/ocrserver) live there; /usr/bin/python3 has no fitz. The PDF
+# pypdfium2/Pillow/requests (~/venv/ocrserver) live there; /usr/bin/python3 has none of them. The PDF
 # store is root-owned but world-readable, and the workspace dir is ours.
 #
 # Install (needs sudo):

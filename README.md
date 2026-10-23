@@ -84,7 +84,7 @@ All are optional. Defaults are baked into the Dockerfile; override with `-e VAR=
 # Inside a running container
 docker exec -it <container> python3 /workspace/batch_ocr.py --resume
 
-# Or on the host (after `pip install PyMuPDF Pillow requests`) against any endpoint
+# Or on the host (after `pip install pypdfium2 Pillow requests`) against any endpoint
 python3 batch_ocr.py \
   --input-dir ./pdfs \
   --output-dir ./ocr_json \
