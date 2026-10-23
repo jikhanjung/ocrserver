@@ -3,7 +3,7 @@
 > **🟢 이 박스가 현재 상태의 전부다 (2026-10-20).**
 > - **GPU 는 둘 다 figsplit 학습 중** (`~/projects/figsplit`, 도판→패널 로컬 모델). `chandra-a`·`llm` **정지** — 컨테이너는 wrapper·llmwrapper·nginx 만.
 >   `/healthz` 는 ok 이고, chandra `/health` 502 는 의도된 상태다. OCR+LLM 복구는 **사용자가 요청할 때만** 한다(`mode-llm.sh`).
-> - **이미지**: `ocrwrapper:0.3.15`(10-23 배포, **Docker Hub 에는 아직 안 올림** — 사용자 확인 대기). 0.3.14 대비 코드 변경은 없고 certifi·pip·ca-certificates 만 갱신했다(devlog 049).
+> - **이미지**: `ocrwrapper:0.3.15`(10-23 배포, Hub push, digest `afb5973f…`). 0.3.14 대비 코드 변경은 없고 certifi·pip·ca-certificates 만 갱신했다(devlog 049).
 >   nginx 도 10-23 새 `nginx:alpine` 으로 재생성했다. 이전 `ocrwrapper:0.3.14`(10-20 08:03 배포, Hub push, digest `6f47af06…`), 워커 스크립트 `figures_worker.py` **0.3.11**(10-20 09:47 재시작, 실패 오류에 codex 의 turn.failed 메시지를 담음). 확인은 `curl -s localhost:8080/healthz`.
 >   0.3.14: **ocrserver.db 를 WAL 로 전환**(시작 때 PRAGMA, 파일에 남음), `POST /internal/metrics`(수집기 → wrapper 가 metrics.db 에 기록),
 >   **metrics.db 연도별 분리**(새해 첫 줄이 오면 전년도를 `metrics_YYYY.db` 로 보관하고 새로 시작, 조회 때 전년도를 ro ATTACH). 보관 정리는 하지 않는다(10년 ≈ 330 MB, 사용자 결정).
@@ -1014,7 +1014,7 @@ llm          vllm/vllm-openai:latest       Exited
 - ✅ 10-23 컨테이너:
   - `wrapper`·`llmwrapper` → `ocrwrapper:0.3.15`: certifi 2026.10.19, pip 26.2.2, ca-certificates 20250419+deb13u1 이라 G3 가 없다.
   - `nginx` → 새 `nginx:alpine`(1.31.8): G3 가 없다.
-  - 확인: `/healthz` ok 0.3.15, `/status` 200, 워커 오류 없음. 0.3.15 를 Docker Hub 에 올리는 것은 사용자 확인 대기.
+  - 확인: `/healthz` ok 0.3.15, `/status` 200, 워커 오류 없음. Docker Hub push 완료(digest `afb5973f…`).
 - **남은 것**:
   - `~/venv/ocrserver`(도판 워커 10개가 쓴다): pip 25.1.1, certifi 2026.04.22.
     워커가 쉴 때 `~/venv/ocrserver/bin/python -m pip install -U "pip>=26.2.2" "certifi>=2026.10.19"` 를 돌리고 워커를 재시작한다
