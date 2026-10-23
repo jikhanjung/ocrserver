@@ -8,6 +8,7 @@
 
 - `wrapper/requirements.lock`: 0.3.14 이미지의 `pip freeze` 그대로 두고 certifi 만 2026.10.19 로 올렸다. Dockerfile 은 이 파일로 설치한다.
 - 0.3.16 은 0.3.14 와 패키지 목록이 certifi·pip 만 다르다. 배포하고 Hub 에 올렸다(digest `4bf6ab40…`).
+- 0.3.17 도 배포하고 Hub 에 올렸다(digest `95cc661e…`).
 
 ## 0.3.17 — pypdfium2 (사용자 요청)
 

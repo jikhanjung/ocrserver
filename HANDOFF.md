@@ -3,7 +3,7 @@
 > **🟢 이 박스가 현재 상태의 전부다 (2026-10-20).**
 > - **GPU 는 둘 다 figsplit 학습 중** (`~/projects/figsplit`, 도판→패널 로컬 모델). `chandra-a`·`llm` **정지** — 컨테이너는 wrapper·llmwrapper·nginx 만.
 >   `/healthz` 는 ok 이고, chandra `/health` 502 는 의도된 상태다. OCR+LLM 복구는 **사용자가 요청할 때만** 한다(`mode-llm.sh`).
-> - **이미지**: `ocrwrapper:0.3.17`(10-23 배포, **Hub push 는 사용자 확인 대기**). PDF 렌더를 PyMuPDF(AGPL) → **pypdfium2** 로 바꿨다(devlog 050).
+> - **이미지**: `ocrwrapper:0.3.17`(10-23 배포, Hub push, digest `95cc661e…`). PDF 렌더를 PyMuPDF(AGPL) → **pypdfium2** 로 바꿨다(devlog 050).
 >   패키지는 `wrapper/requirements.lock` 으로 고정한다. 0.3.15 는 고정 없이 재빌드해 PyMuPDF 2.0 이 딸려 와서 0.3.16 으로 고정했다(Hub `4bf6ab40…`).
 >   0.3.15 는 emSign CA 대응(certifi·pip·ca-certificates, devlog 049, Hub `afb5973f…`)이었다. nginx 도 10-23 새 `nginx:alpine` 으로 재생성했다.
 >   **워커 0.3.12(pypdfium2)는 dev 트리에만 있다** — 라이브 반영은 사용자 sudo(「곧 해야 할 작업」). 이전 `ocrwrapper:0.3.14`(10-20 08:03 배포, Hub push, digest `6f47af06…`), 워커 스크립트 `figures_worker.py` **0.3.11**(10-20 09:47 재시작, 실패 오류에 codex 의 turn.failed 메시지를 담음). 확인은 `curl -s localhost:8080/healthz`.
@@ -1009,7 +1009,6 @@ llm          vllm/vllm-openai:latest       Exited
 - **워커 0.3.12 라이브 반영** (사용자 sudo, `/srv/ocrserver/scripts/` 는 root 소유):
   `sudo cp ~/projects/ocrserver/scripts/figures_worker.py /srv/ocrserver/scripts/ && sudo systemctl restart 'ocrserver-figures-worker@*'`.
   `~/venv/ocrserver` 에 pypdfium2 5.14.0 은 설치돼 있다. 라이브 워커는 그때까지 0.3.11(PyMuPDF)이다.
-- **0.3.17 Hub push**: 사용자 확인 대기.
 - **OCR 회귀**: chandra 가 정지 중이라 pdfium 렌더로 `kruskal1964.pdf` 15/15 를 아직 못 봤다. OCR 복구 때 꼭 확인한다.
 - **chandra 이미지**: 루트 `Dockerfile` 은 pypdfium2 로 바꿨지만 재빌드하지 않았다. 이미지 안의 `batch_ocr.py` 는 아직 PyMuPDF 판이다.
   emSign 얇은 레이어(0.1.2)를 만들 때 같이 한다.
