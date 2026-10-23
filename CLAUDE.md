@@ -26,7 +26,7 @@ containers + nginx, all orchestrated by `docker compose`.
 | `wrapper` | `honestjung/ocrwrapper` | FastAPI: `/ocr` upload, `/api/*`, dashboard at `/`, `/status`, `/metrics` |
 | `chandra-a` | `honestjung/ocrserver` | vLLM serving Chandra on GPU 0 (always on) |
 | `chandra-b` | `honestjung/ocrserver` | vLLM serving Chandra on GPU 1 (`profiles: [ocr]`) |
-| `llm` | `vllm/vllm-openai` | Qwen3-14B general LLM on GPU 1 (`profiles: [llm]`) |
+| `llm` | `honestjung/vllm-openai` (`vllm/vllm-openai` + security layer, `Dockerfile.vllm-patch`) | Qwen3-14B general LLM on GPU 1 (`profiles: [llm]`) |
 | `nginx` | `nginx:alpine` | Front routing, with per-mode config (`nginx.ocr.conf` / `nginx.llm.conf`) |
 
 ### Operating modes

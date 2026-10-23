@@ -1,0 +1,24 @@
+# llm 서비스용 vllm/vllm-openai 를 vLLM 버전은 그대로 두고 보안 갱신만 얹는 얇은 레이어.
+# 새 vllm 태그를 받으면 vLLM 자체가 바뀌어 Qwen3-32B-AWQ 설정을 다시 검증해야 하므로, 그때까지는 이 방식으로 간다.
+#
+#   docker build -f Dockerfile.vllm-patch -t honestjung/vllm-openai:0.20.2-p1 .
+#
+# 0.20.2-p1 (2026-10-23, devlog 052): emSign CA 키 유출(GHSA-6q48-6c7w-9gw2) —
+#   ca-certificates 갱신 + emSign ECC Root CA - G3 제외, pip>=26.2.2(내장 certifi), certifi>=2026.10.19
+# 베이스: compose 가 쓰던 vllm/vllm-openai:latest(2026-05-08 빌드, vLLM 0.20.2). :latest 는 움직이므로 digest 로 고정한다.
+FROM vllm/vllm-openai@sha256:70a098d90dbab428a001d9e852fc0fc8d67da5beb03e7851a22247653bf35923
+
+RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade ca-certificates \
+    && sed -i 's|^mozilla/emSign_ECC_Root_CA_-_G3.crt$|!&|' /etc/ca-certificates.conf \
+    && update-ca-certificates --fresh \
+    && rm -rf /var/lib/apt/lists/* \
+    && ! ls /etc/ssl/certs | grep -q emSign_ECC_Root_CA_-_G3
+
+RUN pip3 install --no-cache-dir -U "pip>=26.2.2" \
+    && pip3 install --no-cache-dir -U "certifi>=2026.10.19"
+
+# 빌드 때 확인: certifi·pip 내장 certifi 버전, certifi 번들에 G3 없음, vLLM 버전 그대로(import 하지 않고 파일로 본다 — torch/CUDA 안 건드림).
+RUN python3 -I -c "import certifi, pip._vendor.certifi as v, importlib.metadata as md; \
+assert certifi.__version__ >= '2026.10.19' and v.__version__ >= '2026.10.19', (certifi.__version__, v.__version__); \
+assert 'emSign ECC Root CA - G3' not in open(certifi.where()).read(); \
+assert md.version('vllm') == '0.20.2', md.version('vllm'); print('ok', certifi.__version__, v.__version__, md.version('vllm'))"

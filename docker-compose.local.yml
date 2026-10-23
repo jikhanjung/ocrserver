@@ -48,7 +48,7 @@ services:
     restart: unless-stopped
 
   llm:
-    image: vllm/vllm-openai:latest
+    image: honestjung/vllm-openai:0.20.2-p1
     command: >-
       Qwen/Qwen3-14B
       --served-model-name qwen

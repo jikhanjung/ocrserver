@@ -1029,7 +1029,8 @@ llm          vllm/vllm-openai:latest       Exited
   - ✅ `~/venv/ocrserver`(도판 워커 10개가 쓴다): 10-23 pip 26.2.2, certifi 2026.10.19 로 올렸다. 워커는 localhost http 만 써서 재시작은 필요 없다.
   - **정지 이미지** (10-23 확인, 컨테이너를 띄우지 않고 `docker export` 로 봤다). 다시 띄우기 전에 고친다:
     - ✅ chandra: `ocrserver:0.1.2` 로 고쳤다(위 pypdfium2 항목, devlog 051). 옛 uv 는 남아 있지만 런타임에 쓰지 않는다.
-    - `vllm/vllm-openai:latest`(5개월 전): certifi 2026.04.22, pip 25.0.1, G3 가 있고 uv 가 있다. OCR+LLM 복구 때 감싸거나 새로 받는다.
+    - ✅ llm: `honestjung/vllm-openai:0.20.2-p1`(10-23, devlog 052). 같은 vLLM 0.20.2 에 보안 레이어만 얹었고, Hub 새 저장소(digest `2b525d22…`)에 올리고 compose 를 바꿨다.
+      **LLM 모드 복구 때 Qwen3-32B-AWQ 기동을 확인한다** — 문제가 생기면 `vllm/vllm-openai:latest` 로 되돌린다.
     - `dolfinserver2:0.29.6`(안 씀): pip 25.0.1, G3 있음. `figsplit-review`(실행 중)는 정상이다.
   - `figsplit/model/.venv`: certifi 는 이미 2026.10.19 이고 pip 만 26.2.1 이다. 학습이 끝난 뒤 올린다.
 
