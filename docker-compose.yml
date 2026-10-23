@@ -52,7 +52,7 @@ services:
     restart: unless-stopped
 
   chandra-a:
-    image: honestjung/ocrserver:0.1.1
+    image: honestjung/ocrserver:0.1.2
     deploy:
       resources:
         reservations:
@@ -74,7 +74,7 @@ services:
   # GPU 1 — OCR 모드 (mode-ocr.sh로 활성화)
   chandra-b:
     profiles: [ocr]
-    image: honestjung/ocrserver:0.1.1
+    image: honestjung/ocrserver:0.1.2
     deploy:
       resources:
         reservations:

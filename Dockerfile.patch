@@ -1,0 +1,33 @@
+# honestjung/ocrserver 를 모델 레이어(10.6 GB)를 다시 받지 않고 고치는 얇은 레이어.
+# 루트 Dockerfile 로 전체를 새로 빌드하면 이 호스트(KOPRI)에서는 snapshot_download 가 12% 에서 멈춘다(CLAUDE.md).
+#
+#   docker build -f Dockerfile.patch --build-arg BASE=honestjung/ocrserver:0.1.1 -t honestjung/ocrserver:0.1.2 .
+#
+# 0.1.2 (2026-10-23, devlog 051):
+#   - emSign CA 키 유출(GHSA-6q48-6c7w-9gw2): ca-certificates 갱신 + emSign ECC Root CA - G3 제외,
+#     pip>=26.2.2(내장 certifi), certifi>=2026.10.19
+#   - batch_ocr.py: PyMuPDF(AGPL) → pypdfium2 (wrapper 0.3.17 과 같은 전환)
+# 다음에 외부에서 루트 Dockerfile 로 전체를 다시 빌드하면 이 내용이 다 들어가므로 이 파일은 필요 없어진다.
+ARG BASE=honestjung/ocrserver:0.1.1
+FROM ${BASE}
+
+RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade ca-certificates \
+    && sed -i 's|^mozilla/emSign_ECC_Root_CA_-_G3.crt$|!&|' /etc/ca-certificates.conf \
+    && update-ca-certificates --fresh \
+    && rm -rf /var/lib/apt/lists/* \
+    && ! ls /etc/ssl/certs | grep -q emSign_ECC_Root_CA_-_G3
+
+RUN pip3 uninstall -y PyMuPDF \
+    && pip3 install --no-cache-dir -U "pip>=26.2.2" \
+    && pip3 install --no-cache-dir -U "certifi>=2026.10.19" "pypdfium2==5.14.0"
+
+COPY batch_ocr.py /workspace/batch_ocr.py
+
+# 빌드 때 확인: certifi·pip 내장 certifi 버전, G3 가 certifi 번들에 없음, batch_ocr 의 렌더가 돈다(torch/CUDA 는 안 건드린다).
+RUN python3 -I -c "import certifi, pip._vendor.certifi as v; \
+assert certifi.__version__ >= '2026.10.19' and v.__version__ >= '2026.10.19', (certifi.__version__, v.__version__); \
+assert 'emSign ECC Root CA - G3' not in open(certifi.where()).read()" \
+    && cd /tmp && python3 -c "import io, sys, pypdfium2 as pdfium; sys.path.insert(0, '/workspace'); \
+d = pdfium.PdfDocument.new(); d.new_page(612, 792); d.save('/tmp/t.pdf'); \
+import batch_ocr; s = batch_ocr.render_page('/tmp/t.pdf', 0); assert len(s) > 100; print('render ok', len(s))" \
+    && rm -f /tmp/t.pdf
