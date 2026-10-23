@@ -1,7 +1,7 @@
 # HANDOFF — 2026-10-23 (wrapper 0.3.17 pypdfium2 · 0.3.16 패키지 고정 · 0.3.15 emSign CA 대응 · 워커 0.3.12 · codex 한도 75% 정책)
 
 > **🟢 이 박스가 현재 상태의 전부다 (2026-10-20).**
-> - **GPU 는 둘 다 figsplit 학습 중** (`~/projects/figsplit`, 도판→패널 로컬 모델). `chandra-a`·`llm` **정지** — 컨테이너는 wrapper·llmwrapper·nginx 만.
+> - **GPU: 10-23 03:00 UTC 기준 GPU 0 만 figsplit 학습 중**(B-f2l-1280L-v2). GPU 1 의 B-f2l-1024L-v2hc 는 학습·평가가 끝나 01:52 이후 비어 있다. **(10-20 기록: GPU 는 둘 다 figsplit 학습 중)** (`~/projects/figsplit`, 도판→패널 로컬 모델). `chandra-a`·`llm` **정지** — 컨테이너는 wrapper·llmwrapper·nginx 만.
 >   `/healthz` 는 ok 이고, chandra `/health` 502 는 의도된 상태다. OCR+LLM 복구는 **사용자가 요청할 때만** 한다(`mode-llm.sh`).
 > - **이미지**: `ocrwrapper:0.3.17`(10-23 배포, Hub push, digest `95cc661e…`). PDF 렌더를 PyMuPDF(AGPL) → **pypdfium2** 로 바꿨다(devlog 050).
 >   패키지는 `wrapper/requirements.lock` 으로 고정한다. 0.3.15 는 고정 없이 재빌드해 PyMuPDF 2.0 이 딸려 와서 0.3.16 으로 고정했다(Hub `4bf6ab40…`).
@@ -1032,7 +1032,7 @@ llm          vllm/vllm-openai:latest       Exited
     - ✅ llm: `honestjung/vllm-openai:0.20.2-p1`(10-23, devlog 052). 같은 vLLM 0.20.2 에 보안 레이어만 얹었고, Hub 새 저장소(digest `2b525d22…`)에 올리고 compose 를 바꿨다.
       **LLM 모드 복구 때 Qwen3-32B-AWQ 기동을 확인한다** — 문제가 생기면 `vllm/vllm-openai:latest` 로 되돌린다.
     - `dolfinserver2:0.29.6`(안 씀): pip 25.0.1, G3 있음. `figsplit-review`(실행 중)는 정상이다.
-  - `figsplit/model/.venv`: certifi 는 이미 2026.10.19 이고 pip 만 26.2.1 이다. 학습이 끝난 뒤 올린다.
+  - ✅ `figsplit/model/.venv`: 10-23 pip 26.2.2(사용자 요청, 학습 중이었지만 학습은 pip 을 쓰지 않는다). certifi 는 이미 2026.10.19 였다. **이로써 이 호스트의 emSign 대응은 끝났다.**
 
 **2026-10-20 추가:**
 
