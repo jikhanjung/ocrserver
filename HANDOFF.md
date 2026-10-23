@@ -1008,6 +1008,14 @@ llm          vllm/vllm-openai:latest       Exited
 
 ## 곧 해야 할 작업
 
+**2026-10-23 추가 — 루트 디스크 (devlog 054):**
+
+- 92% → **76%(109 GB 여유)**. Qwen3-14B 를 삭제하고, `hf_cache` 는 `/mnt/disk1/ocrserver/hf_cache` 로 옮겼다(compose 절대 경로).
+  `figure_ws` 는 `/mnt/disk1/ocrserver/figure_ws` 로 옮기고 `/srv/ocrserver/figure_ws` 를 심볼릭 링크로 바꿨다(유닛 그대로).
+- VG 여유가 0 이라 `lvextend` 는 불가능하다. Docker containerd 저장소가 138 GB 다(content 25 + snapshots 113).
+  큰 이미지를 빌드·push 하면 루트가 수십 GB 씩 는다 — 빌드 전에 `df -h /` 를 본다.
+- HDD 가 안 붙으면 llm 은 모델을 루트에 다시 받고, 도판 워커는 실패한다. 재부팅 뒤에는 `mountpoint /mnt/disk1` 부터 본다.
+
 **2026-10-23 추가 — pypdfium2 전환 (devlog 050):**
 
 - ✅ 워커 0.3.12 라이브 반영(10-23 02:09 UTC, 사용자 sudo). 10개 모두 0.3.12, 오류 없음. 도판 큐가 비어 있어 실제 항목으로는 아직 안 돌았다 —

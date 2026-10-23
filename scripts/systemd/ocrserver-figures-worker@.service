@@ -32,6 +32,7 @@ Group=jikhanjung
 EnvironmentFile=/srv/ocrserver/.env
 Environment=WRAPPER_URL=http://127.0.0.1:8080
 Environment=PDF_DIR=/srv/ocrserver/data/pdfs
+# /srv/ocrserver/figure_ws is a symlink to /mnt/disk1/ocrserver/figure_ws (HDD) since 2026-10-23 (devlog 054)
 Environment=FIGURES_WS_DIR=/srv/ocrserver/figure_ws
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=PYTHONUNBUFFERED=1

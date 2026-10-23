@@ -108,7 +108,7 @@ services:
       --trust-remote-code
       --enforce-eager
     volumes:
-      - ./hf_cache:/root/.cache/huggingface
+      - /mnt/disk1/ocrserver/hf_cache:/root/.cache/huggingface  # HDD (10-23, devlog 054)
       - /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro
     deploy:
       resources:
