@@ -26,9 +26,9 @@
 >   리셋이 감지되면(resets_at 변경 또는 used 급락) 빠른 모드로 돌아간다. 한도는 **예고 없이 일찍 리셋된다**: 10-17 20:40 과 10-20 06:32, 두 번 다 58%에서 리셋됐다.
 >   현재 창은 **10-27 06:32 UTC 까지**(resets_at 1793082737)이고, 10-20 07:00 부터 빠른 모드다.
 >   세션 cron(매시 정시 리포트, scratchpad `report.sh`)이 이 정책을 돌렸다. 세션 전용이라 세션이 닫히면 멈춘다.
->   **⚠ 10-22 확인: 그 cron 은 10-20 22:27 UTC 이후 멈춰 있다**(마지막 기록 used 51%, 스크립트는
->   `/tmp/claude-1000/-home-jikhanjung-projects-ocrserver/7ceb9a99-6dcb-42d5-bece-6d50603f34f3/scratchpad/report.sh`). 75% 전환을 해 줄 장치가 없다.
->   10-20 20:18 이후 도판 큐가 비어 있어 당장 문제는 없지만, 새 작업이 들어오기 전에 cron 을 다시 건다.
+>   10-20 22:27 부터 멈춰 있던 cron 을 **10-23 05:57 UTC 에 다시 걸었다**(세션 e8e40eac, job `170116e7`, 매시 :07, 7일 뒤 10-30 쯤 만료 — 한도 창 끝과 같다).
+>   스크립트는 `/tmp/claude-1000/-home-jikhanjung-projects-ocrserver/e8e40eac-ef90-476c-8d5c-62c94cf477a4/scratchpad/report.sh`. 세션 전용이라 세션이 닫히면 멈춘다.
+>   **10-23 05:40 확인: 한도가 또 일찍 리셋됐다** — used 0%, 새 창은 **10-30 00:00 UTC** 까지(resets_at 1793318432). 05:2x 부터 panels·link 가 들어와 빠른 모드로 처리 중이다.
 > - **ocrserver.db 는 0.3.14 부터 WAL.** 이전(delete 저널)에는 긴 읽기가 wrapper 쓰기를 막았다(10-18 03:57 제 2분 쿼리 → 워커 500 18건). 큰 집계는 그래도 일일 백업에서 한다.
 > - 일일 백업 잠금 5.9 s(10-19, busy timeout 5 s 초과)는 WAL 로 해소될 것이다 — 10-20 18:07 회차가 컨테이너 실행·WAL 첫 회.
 > - **규칙 (사용자, 10-20): 호스트 프로세스는 컨테이너가 연 DB 파일(ocrserver.db·llmserver.db·metrics.db)을 ro 라도 열지 않는다.**
