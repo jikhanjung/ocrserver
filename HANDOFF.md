@@ -1,8 +1,11 @@
 # HANDOFF — 2026-10-23 (wrapper 0.3.17 pypdfium2 · 0.3.16 패키지 고정 · 0.3.15 emSign CA 대응 · 워커 0.3.12 · codex 한도 75% 정책)
 
 > **🟢 이 박스가 현재 상태의 전부다 (2026-10-20).**
-> - **GPU: 10-23 03:00 UTC 기준 GPU 0 만 figsplit 학습 중**(B-f2l-1280L-v2). GPU 1 의 B-f2l-1024L-v2hc 는 학습·평가가 끝나 01:52 이후 비어 있다. **(10-20 기록: GPU 는 둘 다 figsplit 학습 중)** (`~/projects/figsplit`, 도판→패널 로컬 모델). `chandra-a`·`llm` **정지** — 컨테이너는 wrapper·llmwrapper·nginx 만.
->   `/healthz` 는 ok 이고, chandra `/health` 502 는 의도된 상태다. OCR+LLM 복구는 **사용자가 요청할 때만** 한다(`mode-llm.sh`).
+> - **GPU (10-23 02:54 UTC~)**: **GPU 0 = figsplit 학습**(B-f2l-1280L-v2, `~/projects/figsplit`). **GPU 1 = OCR `chandra-b`(0.1.2)** — 사용자 요청으로 띄웠다.
+>   `chandra-a`·`llm` 은 **정지**. 표준 모드 스크립트에 없는 모양이라 손으로 맞췄다:
+>   `docker compose --profile ocr up -d --no-deps chandra-b` → healthy(8분) → `cp nginx.ocr.conf nginx.conf` + `nginx -s reload`(upstream 이 `resolve` 라 꺼진 chandra-a 는 빠진다).
+>   `OCR_CONCURRENCY=6`(GPU 하나) 그대로라 wrapper 는 재생성하지 않았다. `/api/services` mode `1ocr`.
+>   `mode-ocr.sh` 는 동시 12(GPU 둘 전제)로 wrapper 를 재생성하므로 GPU 0 이 빌 때 chandra-a 까지 띄울 때만 쓴다. `mode-llm.sh` 는 chandra-b 를 끄고 chandra-a 로 보낸다(지금 chandra-a 는 꺼져 있음 — 주의).
 > - **이미지**: `ocrwrapper:0.3.17`(10-23 배포, Hub push, digest `95cc661e…`). PDF 렌더를 PyMuPDF(AGPL) → **pypdfium2** 로 바꿨다(devlog 050).
 >   패키지는 `wrapper/requirements.lock` 으로 고정한다. 0.3.15 는 고정 없이 재빌드해 PyMuPDF 2.0 이 딸려 와서 0.3.16 으로 고정했다(Hub `4bf6ab40…`).
 >   0.3.15 는 emSign CA 대응(certifi·pip·ca-certificates, devlog 049, Hub `afb5973f…`)이었다. nginx 도 10-23 새 `nginx:alpine` 으로 재생성했다.
@@ -1008,9 +1011,11 @@ llm          vllm/vllm-openai:latest       Exited
 
 - ✅ 워커 0.3.12 라이브 반영(10-23 02:09 UTC, 사용자 sudo). 10개 모두 0.3.12, 오류 없음. 도판 큐가 비어 있어 실제 항목으로는 아직 안 돌았다 —
   다음 도판 작업의 첫 항목들(페이지 렌더·target·crop)을 확인한다.
-- **OCR 회귀**: chandra 가 정지 중이라 pdfium 렌더로 `kruskal1964.pdf` 15/15 를 아직 못 봤다. OCR 복구 때 꼭 확인한다.
+- ✅ **OCR 회귀**(10-23 02:56 UTC, chandra-b 0.1.2 + wrapper 0.3.17 pdfium): `kruskal1964.pdf` **15/15, 86 s**(job `b380a32a`, client `claude-verify-pdfium-052`).
+  이전 PyMuPDF 세 회(045·046·048)와의 단어 유사도 평균 0.947, 세 회끼리 0.946 — 기준선 안이다.
+  5쪽(LaTeX `&` 정렬 위치)·8쪽(배열 도식, 원래 회차 간 0.75–0.80 으로 흔들림)만 조금 낮고 내용 손실은 없다.
 - ✅ **chandra 이미지 0.1.2**(10-23, devlog 051): 0.1.1 위 얇은 레이어(`Dockerfile.patch`)로 emSign 대응과 pypdfium2 판 `batch_ocr.py` 를 넣었다.
-  Hub push(digest `9fbb4908…`), compose 를 0.1.2 로 바꿨다. **vLLM 기동·OCR 회귀는 OCR 복구 때 확인한다** — 문제가 생기면 compose 를 0.1.1 로 되돌린다.
+  Hub push(digest `9fbb4908…`), compose 를 0.1.2 로 바꿨다. ✅ 10-23 chandra-b 로 기동(healthy 8분)·회귀 15/15 확인.
 
 **2026-10-23 추가 — emSign CA 키 유출 (GHSA-6q48-6c7w-9gw2), 도판 작업 재개 전에 처리:**
 

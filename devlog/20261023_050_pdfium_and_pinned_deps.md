@@ -42,4 +42,6 @@ PaperMeister 는 2026-08-13 에 이미 pypdfium2(BSD-3/Apache-2.0)로 옮겼고,
 - 워커 비교: 옛 `render_crop`·`render_target` 과 새것을 kruskal + 6편에서 돌렸다.
   - clip 좌표가 같고 같은 영역이다(y 뒤집힘 없음). 크기 차이는 1–2 px, 차이 1.5–7.5/255 다. 글꼴 대체 편만 13 이다.
 - 배포: 0.3.17 `/healthz` ok, `/status` 200, 컨테이너 안에서 pdfium 으로 `/data/pdfs` 를 연다.
-- **아직 못 한 것**: chandra 가 정지 중이라 실제 OCR 회귀(`kruskal1964.pdf` 15/15)는 OCR 복구 때 확인한다.
+- OCR 회귀(10-23 02:56 UTC, chandra-b 0.1.2): `kruskal1964.pdf` 15/15, 86 s.
+  이전 PyMuPDF 세 회와의 단어 유사도 평균 0.947, 세 회끼리 0.946 으로 기준선 안이다.
+  5쪽(LaTeX `&` 정렬 위치)·8쪽(배열 도식, 원래 흔들리는 쪽)만 조금 낮고 내용 손실은 없다.

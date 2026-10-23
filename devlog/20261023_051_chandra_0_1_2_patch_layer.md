@@ -32,8 +32,7 @@ OS 저장소에 G3 가 있었고, certifi 2026.04.22, pip 26.1.1(내장 2026.02.
 
 ## 남은 것
 
-- **vLLM 기동과 OCR 회귀를 아직 확인하지 못했다.** OCR 복구 때 `mode-llm.sh`(또는 `mode-ocr.sh`)로 chandra 가 0.1.2 로 뜨면
-  `kruskal1964.pdf` 15/15 를 확인한다. 문제가 생기면 compose 를 0.1.1 로 되돌린다(이미지는 로컬과 Hub 에 있다).
+- ✅ 10-23 chandra-b(GPU 1)로 띄웠다: healthy 까지 8분, GPU 42.8 GB. `kruskal1964.pdf` 15/15(86 s, 기준선 안, devlog 050). 0.1.1 은 로컬과 Hub 에 남아 있다.
 - 이미지 안의 옛 `/usr/local/bin/uv`(vllm 베이스 것)는 런타임에 쓰지 않아 그대로 두었다.
 - 다음에 외부 머신에서 루트 `Dockerfile` 로 전체를 빌드하면 이 내용이 다 들어가므로 `Dockerfile.patch` 는 필요 없어진다.
 - `vllm/vllm-openai:latest`(llm 서비스)는 아직 emSign 미대응이다. OCR+LLM 복구 때 같은 방식으로 감싸거나 새 태그로 받는다.
