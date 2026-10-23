@@ -3,8 +3,9 @@
 > **🟢 이 박스가 현재 상태의 전부다 (2026-10-20).**
 > - **GPU (10-23 05:02 UTC~) — LLM only, OCR 정지**: **GPU 1 = LLM** `honestjung/vllm-openai:0.20.2-p1` + Qwen3-32B-AWQ(29.9 GB, 모델은 HDD `hf_cache`).
 >   사용자가 OCR 정지를 감수하고 `./mode-llm.sh --allow-no-ocr` 로 바꿨다(devlog 053 추가). chandra-a·chandra-b 는 정지 상태라 `/health` 502, OCR 요청은 실패한다.
->   **GPU 0**: figsplit `B-f2l-1280L-v2` 학습이 끝났다(19,500 step, best val 0.913). 05:00 기준 그 모델의 평가(`predict.py`)가 돌고 있다.
->   GPU 0 이 비면 `./mode-llm.sh`(옵션 없이)로 chandra-a 를 띄워 **OCR + LLM** 으로 되돌린다 — 그 경로(a 기동)는 아직 미검증.
+>   **GPU 0 = scoremate-omr(smo) 학습**(10-23 06:1x UTC 시작, 약 2.5–3일, 37.6 GB). smo 세션이 **끝날 때까지 GPU 0 에 chandra 를 켜지 말라**고 요청했다 — 끝나면 알려 준다.
+>   (그 전: figsplit `B-f2l-1280L-v2` 학습·평가가 끝났다, 19,500 step, best val 0.913.) 모드 스크립트는 GPU 0 이 바쁘면 chandra-a 를 띄우지 않는다.
+>   **그동안 OCR 은 없다.** OCR 이 필요하면 GPU 1 을 OCR 로 되돌리는 수밖에 없다(`./mode-ocr.sh`, LLM 정지). smo 가 끝나면 `./mode-llm.sh` 로 OCR + LLM — a 기동 경로는 아직 미검증.
 >   **모드 스크립트는 GPU 0 을 본다(devlog 053, `mode-lib.sh`)**: `mode-ocr.sh` 는 GPU 0 이 바쁘면 chandra-a 없이 OCR × 1 로 간다.
 >   `mode-llm.sh` 는 OCR 이 0 이 되면 거절하고, `--allow-no-ocr` 일 때만 진행한다.
 > - **이미지**: `ocrwrapper:0.3.17`(10-23 배포, Hub push, digest `95cc661e…`). PDF 렌더를 PyMuPDF(AGPL) → **pypdfium2** 로 바꿨다(devlog 050).
