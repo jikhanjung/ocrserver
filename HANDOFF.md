@@ -1,9 +1,10 @@
-# HANDOFF — 2026-10-20 09:55 UTC (wrapper 0.3.14 WAL·metrics·백업 docker exec · 워커 0.3.11 · 동시 10 · codex 한도 75% 정책)
+# HANDOFF — 2026-10-23 (wrapper 0.3.15 emSign CA 대응 · 0.3.14 WAL·metrics·백업 docker exec · 워커 0.3.11 · 동시 10 · codex 한도 75% 정책)
 
 > **🟢 이 박스가 현재 상태의 전부다 (2026-10-20).**
 > - **GPU 는 둘 다 figsplit 학습 중** (`~/projects/figsplit`, 도판→패널 로컬 모델). `chandra-a`·`llm` **정지** — 컨테이너는 wrapper·llmwrapper·nginx 만.
 >   `/healthz` 는 ok 이고, chandra `/health` 502 는 의도된 상태다. OCR+LLM 복구는 **사용자가 요청할 때만** 한다(`mode-llm.sh`).
-> - **이미지**: `ocrwrapper:0.3.14`(10-20 08:03 배포, Hub push, digest `6f47af06…`), 워커 스크립트 `figures_worker.py` **0.3.11**(10-20 09:47 재시작, 실패 오류에 codex 의 turn.failed 메시지를 담음). 확인은 `curl -s localhost:8080/healthz`.
+> - **이미지**: `ocrwrapper:0.3.15`(10-23 배포, **Docker Hub 에는 아직 안 올림** — 사용자 확인 대기). 0.3.14 대비 코드 변경은 없고 certifi·pip·ca-certificates 만 갱신했다(devlog 049).
+>   nginx 도 10-23 새 `nginx:alpine` 으로 재생성했다. 이전 `ocrwrapper:0.3.14`(10-20 08:03 배포, Hub push, digest `6f47af06…`), 워커 스크립트 `figures_worker.py` **0.3.11**(10-20 09:47 재시작, 실패 오류에 codex 의 turn.failed 메시지를 담음). 확인은 `curl -s localhost:8080/healthz`.
 >   0.3.14: **ocrserver.db 를 WAL 로 전환**(시작 때 PRAGMA, 파일에 남음), `POST /internal/metrics`(수집기 → wrapper 가 metrics.db 에 기록),
 >   **metrics.db 연도별 분리**(새해 첫 줄이 오면 전년도를 `metrics_YYYY.db` 로 보관하고 새로 시작, 조회 때 전년도를 ro ATTACH). 보관 정리는 하지 않는다(10년 ≈ 330 MB, 사용자 결정).
 > - **도판 워커 10개**: systemd `ocrserver-figures-worker@1`…`@10` 모두 enabled·active. 동시 실행 수는 sudo 없이 런타임으로 조절한다.
@@ -1000,6 +1001,26 @@ llm          vllm/vllm-openai:latest       Exited
   3DGS) 는 `done_with_errors` 로 reconcile 됨. 사용자가 재업로드 필요.
 
 ## 곧 해야 할 작업
+
+**2026-10-23 추가 — emSign CA 키 유출 (GHSA-6q48-6c7w-9gw2), 도판 작업 재개 전에 처리:**
+
+- 배경: emSign ECC Root CA - G3 아래 중간 CA 키 8개가 유출돼 외부로 나가는 TLS 를 MITM 할 수 있다.
+  고친 버전은 certifi ≥ 2026.10.19, pip ≥ 26.2.2(pip 은 내장 certifi 를 쓴다), uv ≥ 0.13.4 다.
+- ✅ 10-23 완료:
+  - 호스트 OS 저장소에는 G3 가 없다. 시스템 python3 의 certifi 는 OS 저장소를 쓴다.
+  - uv(`~/venv/fsis2026` 안의 것이 유일) 0.13.5.
+  - 쉬는 venv 9개와 uv cpython 3.10/3.12 는 pip 26.2.2.
+  - certifi 가 깔린 venv 4개는 certifi 2026.10.19.
+- ✅ 10-23 컨테이너:
+  - `wrapper`·`llmwrapper` → `ocrwrapper:0.3.15`: certifi 2026.10.19, pip 26.2.2, ca-certificates 20250419+deb13u1 이라 G3 가 없다.
+  - `nginx` → 새 `nginx:alpine`(1.31.8): G3 가 없다.
+  - 확인: `/healthz` ok 0.3.15, `/status` 200, 워커 오류 없음. 0.3.15 를 Docker Hub 에 올리는 것은 사용자 확인 대기.
+- **남은 것**:
+  - `~/venv/ocrserver`(도판 워커 10개가 쓴다): pip 25.1.1, certifi 2026.04.22.
+    워커가 쉴 때 `~/venv/ocrserver/bin/python -m pip install -U "pip>=26.2.2" "certifi>=2026.10.19"` 를 돌리고 워커를 재시작한다
+    (`sudo systemctl restart 'ocrserver-figures-worker@*'`, 사용자 실행).
+  - chandra(`ocrserver:0.1.1`)·`vllm/vllm-openai` 이미지는 정지 중이라 확인하지 않았다. 다시 띄우기 전에 certifi 를 본다.
+  - `figsplit/model/.venv`: certifi 는 이미 2026.10.19 이고 pip 만 26.2.1 이다. 학습이 끝난 뒤 올린다.
 
 **2026-10-20 추가:**
 
