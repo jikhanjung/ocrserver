@@ -3,12 +3,19 @@
 # FigEx / dolfinserver2 학습 등 배치 작업 공용 (devlog 045). .env 로 조절.
 # OCR 은 GPU 0 의 chandra-a 하나로 한다. GPU 0 을 다른 작업이 쓰고 있으면
 # OCR 이 0 이 되므로 아무것도 바꾸지 않고 거절한다 (devlog 053).
+#   ./mode-llm.sh --allow-no-ocr   OCR 0 을 감수하고 LLM 만 띄운다 (LLM only, 사용자가 직접 정할 때만).
+#                                  /api/mode 토글은 이 옵션 없이 부르므로 거절 동작은 그대로다.
 set -e
 cd /srv/ocrserver
 [ -f .env ] && set -a && . ./.env && set +a
 . ./mode-lib.sh
 
-if ! is_running chandra-a; then
+ALLOW_NO_OCR=0
+[ "${1:-}" = "--allow-no-ocr" ] && ALLOW_NO_OCR=1
+
+if ! is_running chandra-a && [ "$ALLOW_NO_OCR" = 1 ] && ! gpu0_free_for_chandra_a; then
+    echo "[mode] --allow-no-ocr: chandra-a 가 꺼져 있고 GPU 0 은 다른 작업 중 ($(gpu0_used_mib) MiB) — OCR 없이 LLM 만 띄운다"
+elif ! is_running chandra-a; then
     if ! gpu0_free_for_chandra_a; then
         echo "[mode] 거절: chandra-a 가 꺼져 있고 GPU 0 을 다른 작업이 쓰는 중 ($(gpu0_used_mib) MiB)."
         echo "[mode]       LLM 으로 바꾸면 OCR 백엔드가 0 이 된다. 지금 모드를 유지한다."
@@ -41,4 +48,8 @@ echo "[mode] nginx reload..."
 docker compose exec nginx nginx -s reload 2>/dev/null || \
     docker compose up -d --no-deps --force-recreate nginx
 
-echo "[mode] OCR × 1 (GPU 0) + LLM Qwen3-32B-AWQ (GPU 1, util ${LLM_GPU_UTIL:-0.60}) — concurrency 6"
+if is_running chandra-a; then
+    echo "[mode] OCR × 1 (GPU 0) + LLM Qwen3-32B-AWQ (GPU 1, util ${LLM_GPU_UTIL:-0.60}) — concurrency 6"
+else
+    echo "[mode] LLM only — Qwen3-32B-AWQ (GPU 1, util ${LLM_GPU_UTIL:-0.60}), OCR 백엔드 없음"
+fi

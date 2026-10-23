@@ -36,3 +36,14 @@
   - `mode-ocr.sh` → "GPU 0 사용 중 — chandra-a 는 띄우지 않는다", OCR × 1, 동시 6, `/health` 200.
 - **아직 못 본 경로**: GPU 0 이 빈 상태에서 chandra-a 를 띄우는 쪽(`mode-ocr.sh` → OCR × 2·동시 12, `mode-llm.sh` 의 a 먼저 기동).
   figsplit 학습이 끝난 뒤 처음 쓸 때 확인한다.
+
+## 추가 (10-23 05:02 UTC) — `mode-llm.sh --allow-no-ocr`
+
+사용자가 OCR 이 멈추는 것을 감수하고 GPU 1 을 LLM 으로 바꾸기로 했다(GPU 0 = figsplit). 거절 동작은 그대로 두고, 직접 실행할 때만 쓰는 옵션을 넣었다.
+
+- 옵션은 chandra-a 가 꺼져 있고 GPU 0 이 바쁠 때만 거절을 건너뛴다. `/api/mode` 토글은 옵션 없이 부르므로 계속 거절한다.
+- 실행 결과: chandra-b 중지, `nginx.llm.conf`, llm·llmwrapper 기동.
+  - `/llm/v1/models` 200 까지 232 s 걸렸다. HDD 의 `hf_cache` 에서 Qwen3-32B-AWQ 19 GB 를 읽었다.
+  - GPU 1 29.9 GB, 짧은 생성 "LLM OK", mode `llm`, chandra `/health` 502(의도대로).
+  - **`honestjung/vllm-openai:0.20.2-p1`(devlog 052)과 HDD 로 옮긴 hf_cache(devlog 054)를 이것으로 확인했다.**
+- 되돌리기: GPU 0 이 비면 `./mode-llm.sh`(옵션 없이)가 chandra-a 를 띄워 OCR + LLM 이 된다. 그 경로는 아직 검증하지 않았다.

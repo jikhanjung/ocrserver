@@ -1,12 +1,12 @@
 # HANDOFF — 2026-10-23 (wrapper 0.3.17 pypdfium2 · 0.3.16 패키지 고정 · 0.3.15 emSign CA 대응 · 워커 0.3.12 · codex 한도 75% 정책)
 
 > **🟢 이 박스가 현재 상태의 전부다 (2026-10-20).**
-> - **GPU (10-23 02:54 UTC~)**: **GPU 0 = figsplit 학습**(B-f2l-1280L-v2, `~/projects/figsplit`). **GPU 1 = OCR `chandra-b`(0.1.2)** — 사용자 요청으로 띄웠다.
->   `chandra-a`·`llm` 은 **정지**. 표준 모드 스크립트에 없는 모양이라 손으로 맞췄다:
->   `docker compose --profile ocr up -d --no-deps chandra-b` → healthy(8분) → `cp nginx.ocr.conf nginx.conf` + `nginx -s reload`(upstream 이 `resolve` 라 꺼진 chandra-a 는 빠진다).
->   `OCR_CONCURRENCY=6`(GPU 하나) 그대로라 wrapper 는 재생성하지 않았다. `/api/services` mode `1ocr`.
->   **모드 스크립트는 10-23 부터 GPU 0 을 본다(devlog 053, `mode-lib.sh`)**: `mode-ocr.sh` 는 GPU 0 이 바쁘면 chandra-a 를 띄우지 않고 OCR × 1·동시 6 으로 간다.
->   `mode-llm.sh` 는 OCR 이 0 이 되면 거절한다(지금이 그 상태). 학습이 끝나 GPU 0 이 비면 `mode-ocr.sh` 가 chandra-a 까지 띄운다(OCR × 2·동시 12, 아직 미검증).
+> - **GPU (10-23 05:02 UTC~) — LLM only, OCR 정지**: **GPU 1 = LLM** `honestjung/vllm-openai:0.20.2-p1` + Qwen3-32B-AWQ(29.9 GB, 모델은 HDD `hf_cache`).
+>   사용자가 OCR 정지를 감수하고 `./mode-llm.sh --allow-no-ocr` 로 바꿨다(devlog 053 추가). chandra-a·chandra-b 는 정지 상태라 `/health` 502, OCR 요청은 실패한다.
+>   **GPU 0**: figsplit `B-f2l-1280L-v2` 학습이 끝났다(19,500 step, best val 0.913). 05:00 기준 그 모델의 평가(`predict.py`)가 돌고 있다.
+>   GPU 0 이 비면 `./mode-llm.sh`(옵션 없이)로 chandra-a 를 띄워 **OCR + LLM** 으로 되돌린다 — 그 경로(a 기동)는 아직 미검증.
+>   **모드 스크립트는 GPU 0 을 본다(devlog 053, `mode-lib.sh`)**: `mode-ocr.sh` 는 GPU 0 이 바쁘면 chandra-a 없이 OCR × 1 로 간다.
+>   `mode-llm.sh` 는 OCR 이 0 이 되면 거절하고, `--allow-no-ocr` 일 때만 진행한다.
 > - **이미지**: `ocrwrapper:0.3.17`(10-23 배포, Hub push, digest `95cc661e…`). PDF 렌더를 PyMuPDF(AGPL) → **pypdfium2** 로 바꿨다(devlog 050).
 >   패키지는 `wrapper/requirements.lock` 으로 고정한다. 0.3.15 는 고정 없이 재빌드해 PyMuPDF 2.0 이 딸려 와서 0.3.16 으로 고정했다(Hub `4bf6ab40…`).
 >   0.3.15 는 emSign CA 대응(certifi·pip·ca-certificates, devlog 049, Hub `afb5973f…`)이었다. nginx 도 10-23 새 `nginx:alpine` 으로 재생성했다.
