@@ -1,6 +1,11 @@
 # HANDOFF — 2026-10-23 (wrapper 0.3.17 pypdfium2 · 0.3.16 패키지 고정 · 0.3.15 emSign CA 대응 · 워커 0.3.12 · codex 한도 75% 정책)
 
 > **🟢 이 박스가 현재 상태의 전부다 (2026-10-20).**
+> - **10-26 갱신**:
+>   - **smo 학습은 끝났고 GPU 0 은 비어 있다**(10-26 10:17 UTC, nvo/smo 세션 통보). chandra-a 를 켤지는 사용자 결정을 기다린다(`./mode-llm.sh` → OCR + LLM, a 기동 경로는 미검증). 그동안 GPU 1 = LLM, OCR 정지.
+>   - **panels 섀도(devlog 055)**: systemd --user `ocrserver-panels-shadow` 가 Astra panels 시도마다 figsplit ONNX(`B-f2l-1024L-v2` fp16, GPU 1, 약 3.3 GB)를 돌린다.
+>     입력·Astra 답·ONNX 답을 `/mnt/disk1/ocrserver/panels_shadow/` 에 저장한다. 워커는 그대로다.
+>   - codex 창은 0% 로 쉬는 동안 계속 밀린다. 지금은 11-02 06:11 UTC 까지다. 정시 리포트 cron 은 10-30 쯤 만료된다.
 > - **GPU (10-23 05:02 UTC~) — LLM only, OCR 정지**: **GPU 1 = LLM** `honestjung/vllm-openai:0.20.2-p1` + Qwen3-32B-AWQ(29.9 GB, 모델은 HDD `hf_cache`).
 >   사용자가 OCR 정지를 감수하고 `./mode-llm.sh --allow-no-ocr` 로 바꿨다(devlog 053 추가). chandra-a·chandra-b 는 정지 상태라 `/health` 502, OCR 요청은 실패한다.
 >   **GPU 0 = scoremate-omr(smo) 학습**(10-23 06:1x UTC 시작, 약 2.5–3일, 37.6 GB). smo 세션이 **끝날 때까지 GPU 0 에 chandra 를 켜지 말라**고 요청했다 — 끝나면 알려 준다.

@@ -1,0 +1,27 @@
+# ~/.config/systemd/user/ocrserver-panels-shadow.service  (systemd --user, no sudo)
+#
+# Shadow run of the figsplit ONNX panels model next to every Astra panels call (devlog 055).
+# Read-only on figure_ws; writes /mnt/disk1/ocrserver/panels_shadow/. Uses figsplit's venv
+# (onnxruntime-gpu 1.31, CUDA 13 via pip) on GPU 1 with a 12 GB arena cap.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp ~/projects/ocrserver/scripts/systemd/ocrserver-panels-shadow.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now ocrserver-panels-shadow
+#   journalctl --user -u ocrserver-panels-shadow -f
+# Linger is off: the user manager (and this) runs while jikhanjung has a session (tmux);
+# after a reboot it starts at first login. `sudo loginctl enable-linger jikhanjung` to change that.
+
+[Unit]
+Description=ocrserver panels shadow (figsplit ONNX next to Astra)
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+Environment=TOKENIZERS_PARALLELISM=false
+ExecStart=%h/projects/figsplit/model/.venv/bin/python %h/projects/ocrserver/scripts/panels_shadow.py
+Restart=always
+RestartSec=60
+Nice=10
+
+[Install]
+WantedBy=default.target
