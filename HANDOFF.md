@@ -2,6 +2,7 @@
 
 > **🟢 이 박스가 현재 상태의 전부다 (2026-10-20).**
 > - **10-26 갱신**:
+>   - **10-27: GPU 0 = nvo(notavela-omr) bar 모델 학습(~21 GB, 사용자 승인, 10k→30k step 으로 늘려 **약 14:30 UTC 종료 예정**, 2.5k step 마다 스냅샷 — 급하면 nvo 에 요청해 중단 가능) + figsplit `ext_pred.py`.** nvo 가 "GPU 0 비었다"고 알려 줄 때까지 chandra-a 를 켜지 않는다.
 >   - **smo 학습은 끝났고 GPU 0 은 비어 있다**(10-26 10:17 UTC, nvo/smo 세션 통보). chandra-a 를 켤지는 사용자 결정을 기다린다(`./mode-llm.sh` → OCR + LLM, a 기동 경로는 미검증). 그동안 GPU 1 = LLM, OCR 정지.
 >   - **panels 섀도(devlog 055)**: systemd --user `ocrserver-panels-shadow` 가 Astra panels 시도마다 figsplit ONNX(`B-f2l-1024L-v2` fp16, GPU 1, 약 3.3 GB)를 돌린다.
 >     입력·Astra 답·ONNX 답을 `/mnt/disk1/ocrserver/panels_shadow/` 에 저장한다. 워커는 그대로다.
