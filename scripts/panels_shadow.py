@@ -22,7 +22,7 @@ By default only attempts finished after start are processed (--since all backfil
 Env:
     FIGURES_WS_DIR       default /srv/ocrserver/figure_ws
     SHADOW_DIR           default /mnt/disk1/ocrserver/panels_shadow
-    FIGSPLIT_ONNX_DIR    default /mnt/disk1/figsplit-data/export/figsplit-onnx-fp16-B-f2l-1024L-v2
+    FIGSPLIT_ONNX_DIR    default /mnt/disk1/figsplit-data/export/figsplit-onnx-fp16-B-f2l-1024L-v2lu
     FIGSPLIT_REPO        default ~/projects/figsplit (for figsplit_model.florence_onnx)
     SHADOW_GPU           default 1   (shares GPU 1 with the LLM; arena capped)
     SHADOW_GPU_MEM_GB    default 12
@@ -37,10 +37,10 @@ import shutil
 import sys
 import time
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 WS_DIR = os.getenv("FIGURES_WS_DIR", "/srv/ocrserver/figure_ws")
 SHADOW_DIR = os.getenv("SHADOW_DIR", "/mnt/disk1/ocrserver/panels_shadow")
-ONNX_DIR = os.getenv("FIGSPLIT_ONNX_DIR", "/mnt/disk1/figsplit-data/export/figsplit-onnx-fp16-B-f2l-1024L-v2")
+ONNX_DIR = os.getenv("FIGSPLIT_ONNX_DIR", "/mnt/disk1/figsplit-data/export/figsplit-onnx-fp16-B-f2l-1024L-v2lu")
 FIGSPLIT_REPO = os.path.expanduser(os.getenv("FIGSPLIT_REPO", "~/projects/figsplit"))
 GPU = int(os.getenv("SHADOW_GPU", "1"))
 GPU_MEM_GB = float(os.getenv("SHADOW_GPU_MEM_GB", "12"))
@@ -117,7 +117,7 @@ def shadow(pred, item_dir: str, run_dir: str, out: str) -> str:
     item = inp.get("item") or {}
     labels = [str(e.get("label") or "").strip() for e in item.get("entries") or []]
     labels = [s for s in labels if s]
-    res = {"model": "figsplit B-f2l-1024L-v2 fp16 onnx", "onnx_dir": ONNX_DIR, "shadow_version": VERSION,
+    res = {"model": "figsplit " + os.path.basename(ONNX_DIR.rstrip("/")).removeprefix("figsplit-onnx-"), "onnx_dir": ONNX_DIR, "shadow_version": VERSION,
            "item_id": os.path.basename(item_dir), "file_hash": os.path.basename(os.path.dirname(os.path.dirname(item_dir))),
            "attempt": os.path.basename(run_dir), "at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
            "no_hint": run_model(pred, fig, [])}
